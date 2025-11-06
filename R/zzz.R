@@ -109,32 +109,11 @@ number_of_day <- function(x){
 #' computed with an eigenvalue decomposition.
 #' @rdname pow_matrix
 #' @name pow_matrix
+#' @useDynLib solarr, .registration = TRUE
 #' @export
 #' @noRd
-pow_matrix <- function(x, n = 0, eigen_dec = TRUE){
-  if (nrow(x) == 1 & ncol(x) == 1) return(matrix(x^n))
-  M <- x
-  # Compute the power with decomposition
-  if (eigen_dec) {
-    # Diagonalize the matrix
-    eigen_M <- eigen(M)
-    D <- eigen_M$values
-    P <- eigen_M$vectors
-    iP <- solve(P)
-    M_pow <- P %*% diag(D^n) %*% iP
-    return(M_pow)
-  }
-  # Case power == 0
-  if (n == 0) {
-    M <- diag(1, nrow(M), ncol(M))
-  } else if(n > 1) {
-    M_pow <- M
-    for(i in 2:n){
-      M_pow <- M_pow %*% M
-    }
-    M <- M_pow
-  }
-  return(M)
+pow_matrix <- function(x, n = 0, eigen_dec = FALSE){
+  .Call("pow_matrix_c", as.matrix(x), as.integer(n))
 }
 
 #' Format the pvalue

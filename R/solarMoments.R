@@ -128,7 +128,7 @@ solarMoments <- function(t_now, t_hor, data, ARMA, GARCH, NM_model, transform, t
   #  0)  Forecast mean and variance of Yt_tilde
   # *******************************************************************************
   # Companion matrix
-  A <- ARMA$Phi
+  A <- ARMA$A
   # Residuals vector for mean
   b <- matrix(ARMA$b, ncol = 1)
   # Residuals matrix for variance
@@ -150,8 +150,8 @@ solarMoments <- function(t_now, t_hor, data, ARMA, GARCH, NM_model, transform, t
   j <- 1
   for(j in 1:h){
     # Pre compute the powers
-    A_pow_j <- pow_matrix(A, j, eigen_dec = FALSE)
-    A_pow_hj <- pow_matrix(A, h - j, eigen_dec = FALSE)
+    A_pow_j <- pow_matrix(A, j)
+    A_pow_hj <- pow_matrix(A, h - j)
     # Compute weights for expectations
     df_tT$psi_j[j] <- t(e1) %*% (A_pow_hj %*% b)
     # Intercept contribution

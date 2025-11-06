@@ -9,7 +9,7 @@ R6 class for ARMA(p, q) model
 R6 class for ARMA(p, q) model
 }
 \note{
-Version 1.0.0
+Version 1.0.1
 }
 \seealso{
 \code{\link[stats:arima]{stats::arima()}} which is wrapped in the method \code{fit}.
@@ -32,11 +32,11 @@ Version 1.0.0
 
 \item{\code{mean}}{Numeric scalar, long term expectation.}
 
-\item{\code{variance}}{Numeric scalar, long term variance.}
+\item{\code{variance}}{Numeric scalar, long term variance. See the function \code{\link[=ARMA_variance]{ARMA_variance()}}.}
 
-\item{\code{Phi}}{Numeric matrix, companion matrix to govern the transition between two time steps.}
+\item{\code{A}}{Numeric matrix, companion matrix to govern the transition between two time steps.  See the function \code{\link[=ARMA_companion_matrix]{ARMA_companion_matrix()}}.}
 
-\item{\code{b}}{Numeric vector, unitary vector for the residuals.}
+\item{\code{b}}{Numeric vector, unitary vector for the residuals. See the function \code{\link[=ARMA_vector_b]{ARMA_vector_b()}}.}
 
 \item{\code{tidy}}{Tibble with estimated parameters and relative std. errors.}
 }
@@ -99,15 +99,13 @@ Fit the ARMA model with \code{arima} function.
 \subsection{Method \code{filter()}}{
 Filter the time-series and compute fitted values and residuals.
 \subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{ARMA_modelR6$filter(x, eps0)}\if{html}{\out{</div>}}
+\if{html}{\out{<div class="r">}}\preformatted{ARMA_modelR6$filter(x)}\if{html}{\out{</div>}}
 }
 
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{x}}{Numeric vector, time series to filter.}
-
-\item{\code{eps0}}{Numeric vector, initial residuals of the same length of the MA order.}
 }
 \if{html}{\out{</div>}}
 }

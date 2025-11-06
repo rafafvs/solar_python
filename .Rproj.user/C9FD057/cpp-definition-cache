@@ -1,1 +1,46 @@
-[]
+[
+    {
+        "file": "/Users/macbook/Desktop/solarr/src/init.c",
+        "file_last_write": 1762448348.0,
+        "definitions": [
+            {
+                "usr": "c:@F@R_init_yourpkg",
+                "kind": 6,
+                "parent_name": "",
+                "name": "R_init_yourpkg(DllInfo *)",
+                "file": "/Users/macbook/Desktop/solarr/src/init.c",
+                "line": 14,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
+        "file": "/Users/macbook/Desktop/solarr/src/pow_matrix_c.c",
+        "file_last_write": 1762391675.0,
+        "definitions": [
+            {
+                "usr": "c:pow_matrix_c.c@F@dgemm_nn",
+                "kind": 6,
+                "parent_name": "",
+                "name": "dgemm_nn(const int, const int, const int, const double *, const double *, double *)",
+                "file": "/Users/macbook/Desktop/solarr/src/pow_matrix_c.c",
+                "line": 7,
+                "column": 13,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@pow_matrix_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "pow_matrix_c(SEXP, SEXP)",
+                "file": "/Users/macbook/Desktop/solarr/src/pow_matrix_c.c",
+                "line": 26,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    }
+]

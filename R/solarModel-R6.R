@@ -283,39 +283,10 @@ solarModel <- R6::R6Class("solarModel",
                               data_train <- dplyr::filter(data, isTrain)# & weights != 0)
                               # Initialize an AR model
                               ARMA <- ARMA_modelR6$new(control$arOrder, control$maOrder, control$include.intercept)
-                              # Monthly standardization to ensure consistency
-                              #data_train <- data_train %>%
-                              #  group_by(Month) %>%
-                              #  mutate(mu = mean(Yt_tilde),
-                              #         sd = sd(Yt_tilde),
-                              #         Yt_tilde = (Yt_tilde - mu)/sd)
                               # Fitted AR model
                               ARMA$fit(data_train$Yt_tilde)
-                              # Fitted values
-                              eps0 <- c()
-                              if (ARMA$order[2] > 0){
-                                eps0 <- ARMA$model$residuals[1:ARMA$order[2]]
-                              }
-                              # Loss function
-                              loss_function <- function(par, ARMA, data, eps0){
-                                ARMA_model <- ARMA$clone(TRUE)
-                                # Set intercept equal to TRUE
-                                ARMA_model$.__enclos_env__$private$include.intercept <- TRUE
-                                # Update intercept
-                                ARMA_model$update(c(intercept = par, ARMA_model$phi, ARMA_model$theta))
-                                # Fitted Yt_tilde
-                                data$Yt_tilde_hat <- ARMA_model$filter(data$Yt_tilde, eps0)$fitted
-                                # Fitted residuals
-                                data$eps <- data$Yt_tilde - data$Yt_tilde_hat
-                                abs(mean(dplyr::filter(data, isTrain)$eps))
-                              }
-                              # opt_intercept <- optim(ARMA$intercept, loss_function, ARMA = ARMA, data = data, eps0 = eps0, method = "Brent", lower = -1, upper = 1)$par
-                              # Set intercept equal to TRUE
-                              #ARMA$.__enclos_env__$private$include.intercept <- TRUE
-                              # Update intercept
-                              #ARMA$update(c(intercept = opt_intercept, ARMA$phi, ARMA$theta))
                               # Fitted Yt_tilde
-                              data$Yt_tilde_hat <- ARMA$filter(data$Yt_tilde, eps0 = eps0)$fitted
+                              data$Yt_tilde_hat <- ARMA$filter(data$Yt_tilde)
                               # Fitted residuals
                               data$eps <- data$Yt_tilde - data$Yt_tilde_hat
                               # **************************************************** #
@@ -624,11 +595,7 @@ solarModel <- R6::R6Class("solarModel",
                                 self$fit_monthly_mean()
                               }
                               # Update Yt_tilde_hat
-                              eps0 <- c()
-                              if (self$ARMA$order[2] > 0) {
-                                eps0 <- self$ARMA$model$residuals[1:self$ARMA$order[2]]
-                              }
-                              private$..data[["Yt_tilde_hat"]] <- self$ARMA$filter(private$..data[["Yt_tilde"]], eps0 = eps0)$fitted
+                              private$..data[["Yt_tilde_hat"]] <- self$ARMA$filter(private$..data[["Yt_tilde"]])
                               # Update ARMA residuals
                               private$..data[["eps"]] <- private$..data[["Yt_tilde"]] - private$..data[["Yt_tilde_hat"]]
                               # **************************************************** #

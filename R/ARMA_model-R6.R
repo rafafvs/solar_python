@@ -3,7 +3,7 @@
 #' @rdname ARMA_modelR6
 #' @name ARMA_modelR6
 #' @keywords ARMA
-#' @note Version 1.0.0
+#' @note Version 1.0.1
 #' @seealso [stats::arima()] which is wrapped in the method `fit`.
 #' @export
 ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
@@ -27,28 +27,37 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                                                   include.mean = private$include.intercept, method = "CSS")
                               # Standardize parameters names
                               params <- ARMA_model$coef
+                              # Extract the std.errors
+                              std.errors <- sqrt(diag(ARMA_model$var.coef))
+                              names(std.errors) <- names(params)
                               # Extract intercept
                               intercept <- c(intercept = 0)
+                              std.errors_intercept <- c(intercept = NA)
                               if (private$include.intercept) {
                                 index <- which(names(params) == "intercept")
                                 intercept <- c(intercept = params[[index]])
+                                std.errors_intercept <- c(intercept = std.errors[[index]])
+                                std.errors <- std.errors[-c(index)]
                                 params <- params[-c(index)]
                               }
                               # AR coefficients without intercept
                               phi <- c()
+                              std.errors_ar <- c()
                               if (self$order[1] > 0){
-                                phi <- params[stringr::str_detect(names(params), "ar")]
-                                names(phi) <- paste0("phi_", 1:self$order[1])
+                                index <- stringr::str_detect(names(params), "ar")
+                                phi <- params[index]
+                                std.errors_ar <- std.errors[index]
+                                names(phi) <- names(std.errors_ar) <- paste0("phi_", 1:self$order[1])
                               }
                               # MA coefficients without intercept
                               theta <- c()
+                              std.errors_ma <- c()
                               if (self$order[2] > 0){
-                                theta <- params[stringr::str_detect(names(params), "ma")]
-                                names(theta) <- paste0("theta_", 1:self$order[2])
+                                index <- stringr::str_detect(names(params), "ma")
+                                theta <- params[index]
+                                std.errors_ma <- std.errors[index]
+                                names(theta) <- names(std.errors_ma) <- paste0("theta_", 1:self$order[2])
                               }
-                              # Extract the std.errors
-                              std.errors <- broom::tidy(ARMA_model)$std.error
-                              names(std.errors) <- names(params)
                               # *********************************************
                               # Store coefficients
                               private$..intercept <- intercept
@@ -57,36 +66,13 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                               # Store the fitted model
                               private$..model <- ARMA_model
                               # Store the std. errors
-                              private$..std.errors <- std.errors
+                              private$..std.errors <- c(std.errors_intercept, std.errors_ar, std.errors_ma)
                             },
                             #' @description
                             #' Filter the time-series and compute fitted values and residuals.
                             #' @param x Numeric vector, time series to filter.
-                            #' @param eps0 Numeric vector, initial residuals of the same length of the MA order.
-                            filter = function(x, eps0){
-                              # Maximum order
-                              k <- max(self$order)
-                              # Length of the time series
-                              n <- length(x)
-                              # Vector to store the fitted residuals
-                              e_hat <- eps0
-                              # Vector to store the fitted time series
-                              x_hat <- x
-                              # Initialize the state vector
-                              x_t <- c(x[k:(k-self$order[1]+1)], eps0[self$order[2]:1])
-                              # i <- k + 1
-                              b <- self$b
-                              A <- self$Phi
-                              for(i in (k + 1):n){
-                                x_t <- ARMA_next_step(x_t, A, b, 1, self$intercept)
-                                # Fitted series
-                                x_hat[i] <- x_t[1,1]
-                                # Fitted residuals
-                                e_hat[i] <- x[i] - x_hat[i]
-                                # Update state vector
-                                x_t <- x_t + b * e_hat[i]
-                              }
-                              dplyr::tibble(fitted = x_hat, residuals = e_hat)
+                            filter = function(x){
+                              ARMA_filter(x, self$A, self$b, self$intercept)
                             },
                             #' @description
                             #' Next step function
@@ -94,55 +80,77 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             #' @param n.ahead Numeric scalar, forecasted steps ahead.
                             #' @param eps Numeric vector, optional realized residuals.
                             next_step = function(x, n.ahead = 1, eps = 0){
-                              ARMA_next_step(x, self$Phi, self$b, n.ahead, self$intercept, eps)
+                              ARMA_next_step(n.ahead, x, self$A, self$b, self$intercept, eps)
                             },
                             #' @description
                             #' Update the model's parameters
                             #' @param coefficients Numeric named vector, model's coefficients. If missing nothing will be updated.
                             update = function(coefficients){
-                              # 1) Update the parameters
-                              if (!missing(coefficients)) {
-                                names(coefficients) <- names(self$coefficients)
-                                # Intercept
-                                if(private$include.intercept){
-                                  # Update intercept
-                                  private$..intercept <- c(intercept = coefficients[[1]])
-                                } else {
-                                  # Set intercept equal to zero
-                                  private$..intercept <- c(intercept = 0)
-                                  # Remove intercept from coefficients
-                                  coefficients <- coefficients[-c(1)]
-                                }
-                                # Update the parameters inside the ARMA model
-                                private$..model$coef <- coefficients
-                                # Update AR parameters
-                                if (self$order[1] > 0) {
-                                  private$..phi <- coefficients[stringr::str_detect(names(coefficients), "phi")]
-                                }
-                                # Update MA parameters
-                                if (self$order[2] > 0) {
-                                  private$..theta <- coefficients[stringr::str_detect(names(coefficients), "theta")]
-                                }
-                                # Set std. errors equal to NA
-                                private$..std.errors <- rep(NA, length(coefficients))
+                              if (missing(coefficients)) {
+                                return(invisible(NULL))
                               }
+                              # Extract old coefficients
+                              new_coefs <- self$coefficients
+                              # Extract names
+                              names_old <- names(new_coefs)
+                              names_new <- names(coefficients)
+                              # Warning
+                              if (length(names_new) != length(names_old)) {
+                                cli::cli_alert_warning("In seasonalModel$update(): The lenght of new `coefficients` do not match the length of the old coefficients.")
+                              }
+                              # Update only if they are present
+                              for(i in 1:length(coefficients)){
+                                if (names_new[i] %in% names_old) {
+                                  new_coefs[names_new[i]] <- coefficients[i]
+                                  private$..std.errors[names_new[i]] <- NA_integer_
+                                }
+                              }
+                              # Update intercept
+                              if (private$include.intercept){
+                                private$..intercept <- new_coefs["intercept"]
+                              }
+                              # Update AR parameters
+                              if (self$order[1] > 0) {
+                                private$..phi <- new_coefs[stringr::str_detect(names_old, "phi")]
+                              }
+                              # Update MA parameters
+                              if (self$order[2] > 0) {
+                                private$..theta <- new_coefs[stringr::str_detect(names_old, "theta")]
+                              }
+                              if (!private$include.intercept){
+                                new_coefs <- new_coefs[-which(names_old == "intercept")]
+                              } else {
+                                index <- which(names_old == "intercept")
+                                new_coefs <- c(new_coefs[-index], new_coefs[index])
+                              }
+                              # Update the parameters inside the ARMA model
+                              names(new_coefs) <- names(private$..model$coef)
+                              private$..model$coef <- new_coefs
                             },
                             #' @description
                             #' Update the standard errors of the parameters.
                             #' @param std.errors Numeric named vector, parameters' standard errors. If missing nothing will be updated.
                             update_std.errors = function(std.errors){
-                              if (!missing(std.errors)) {
-                                # Extract the coefficients to match the names
-                                std.errors_updated <- self$coefficients
-                                # Remove std. errors that does not match the params names
-                                std.errors <- std.errors[(names(std.errors) %in% names(std.errors_updated))]
-                                # Update std. errors that are not included with NA
-                                std.errors_updated[!(names(std.errors_updated) %in% names(std.errors))] <- NA_integer_
-                                # Updated std. errors included
-                                std.errors_updated[names(std.errors_updated) %in% names(std.errors)] <- std.errors
-                                #  ================ Private ================
-                                private$..std.errors <- std.errors_updated
+                              if (missing(std.errors)) {
+                                return(invisible(NULL))
                               }
+                              # Extract old coefficients
+                              new_std.errors <- private$..std.errors
+                              # Extract names
+                              names_old <- names(new_std.errors)
+                              names_new <- names(std.errors)
+                              # Warning
+                              if (length(names_new) != length(names_old)) {
+                                cli::cli_alert_warning("In seasonalModel$update_std.errors(): The lenght of new `std.errors` do not match the length of the old std. errors!")
+                              }
+                              # Update only if they are present
+                              for(i in 1:length(std.errors)){
+                                if (names_new[i] %in% names_old) {
+                                  new_std.errors[names_new[i]] <- std.errors[i]
+                                }
+                              }
+                              # Update private std. errors
+                              private$..std.errors <- new_std.errors
                             },
                             #' @description
                             #' Print method for `AR_modelR6` class.
@@ -172,13 +180,13 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                               msg_4 <- paste0("Version: ", private$version, "\n")
                               msg_5 <- "------------------------------------------------\n"
                               msg_6 <- paste0("Intercept: ", format.intercept, " \n")
-                              msg_7 <- paste0("Phi: ", format.ar, " \n")
-                              msg_8 <- paste0("Theta: ", format.ma, " \n")
+                              msg_7 <- paste0("AR parameters: ", format.ar, " \n")
+                              msg_8 <- paste0("MA parameters: ", format.ma, " \n")
                               cat(c(msg_0, msg_1, msg_2, msg_3, msg_4, msg_5, msg_6, msg_7, msg_8))
                             }
                           ),
                           private = list(
-                            version = "1.0.0",
+                            version = "1.0.1",
                             ..model = NA,
                             ..arOrder = 0,
                             ..maOrder = 0,
@@ -217,15 +225,15 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             mean = function(){
                               self$intercept / (1 - sum(self$phi))
                             },
-                            #' @field variance Numeric scalar, long term variance.
+                            #' @field variance Numeric scalar, long term variance. See the function [ARMA_variance()].
                             variance = function(){
-                              ARMA_variance(self$Phi, self$b, 1, 1000)
+                              ARMA_variance(1000, self$A, self$b, 1)
                             },
-                            #' @field Phi Numeric matrix, companion matrix to govern the transition between two time steps.
-                            Phi = function(){
+                            #' @field A Numeric matrix, companion matrix to govern the transition between two time steps.  See the function [ARMA_companion_matrix()].
+                            A = function(){
                               ARMA_companion_matrix(self$phi, self$theta)
                             },
-                            #' @field b Numeric vector, unitary vector for the residuals.
+                            #' @field b Numeric vector, unitary vector for the residuals. See the function [ARMA_vector_b()].
                             b = function(){
                               ARMA_vector_b(self$order[1], self$order[2])
                             },
