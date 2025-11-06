@@ -1,0 +1,33 @@
+Package: solarr
+Type: Package
+Title: Stochastic models for solar radiation
+Version: 1.0.0
+Author: Beniamino Sartini <beniamino.sartini2@unibo.it>. 
+Description: Implementation of stochastic models and option pricing on solar radiation data.
+Depends: 
+    R (>= 4.4.0),
+    ggplot2,
+    dplyr,
+    mclust
+Imports: 
+    np,
+    broom,
+    stringr,
+    rugarch,
+    purrr,
+    tidyr,    
+    lubridate,
+    formula.tools,
+    numDeriv,
+    sp,
+    gstat
+Suggests: 
+    knitr,
+    rmarkdown,
+    testthat
+License: `use_gpl3_license()`
+VignetteBuilder: knitr
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE, r6 = TRUE)
+RoxygenNote: 7.3.2
