@@ -1,7 +1,61 @@
 [
     {
+        "file": "/Users/macbook/Desktop/solarr/src/ARMA_filter_c.c",
+        "file_last_write": 1762464584.0,
+        "definitions": [
+            {
+                "usr": "c:ARMA_filter_c.c@F@dgemv_Ax",
+                "kind": 6,
+                "parent_name": "",
+                "name": "dgemv_Ax(int, const double *, const double *, double *)",
+                "file": "/Users/macbook/Desktop/solarr/src/ARMA_filter_c.c",
+                "line": 7,
+                "column": 20,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@ARMA_filter_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "ARMA_filter_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
+                "file": "/Users/macbook/Desktop/solarr/src/ARMA_filter_c.c",
+                "line": 19,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
+        "file": "/Users/macbook/Desktop/solarr/src/ARMA_forecast_c.c",
+        "file_last_write": 1762463446.0,
+        "definitions": [
+            {
+                "usr": "c:ARMA_forecast_c.c@F@dgemv_Ax",
+                "kind": 6,
+                "parent_name": "",
+                "name": "dgemv_Ax(const int, const double *, const double *, double *)",
+                "file": "/Users/macbook/Desktop/solarr/src/ARMA_forecast_c.c",
+                "line": 7,
+                "column": 20,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@ARMA_forecast_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "ARMA_forecast_c(SEXP, SEXP, SEXP, SEXP, SEXP)",
+                "file": "/Users/macbook/Desktop/solarr/src/ARMA_forecast_c.c",
+                "line": 20,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
         "file": "/Users/macbook/Desktop/solarr/src/init.c",
-        "file_last_write": 1762448348.0,
+        "file_last_write": 1762464619.0,
         "definitions": [
             {
                 "usr": "c:@F@R_init_yourpkg",
@@ -9,7 +63,7 @@
                 "parent_name": "",
                 "name": "R_init_yourpkg(DllInfo *)",
                 "file": "/Users/macbook/Desktop/solarr/src/init.c",
-                "line": 14,
+                "line": 18,
                 "column": 6,
                 "hidden": false
             }

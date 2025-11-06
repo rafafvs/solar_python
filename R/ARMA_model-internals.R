@@ -244,40 +244,20 @@ ARMA_next_step <- function(h = 1, X0, A, b, intercept = 0, eps = 0){
 #' @name ARMA_filter
 #' @export
 #' @noRd
-ARMA_filter = function(x, A, b, intercept = 0){
+ARMA_filter <- function(x, A, b, intercept = 0) {
   # AR order
   p <- attr(A, "arOrder")
   # MA order
   q <- attr(A, "maOrder")
-  # Maximum order
-  k <- max(c(p, q))
-  # Length of the time series
-  n <- length(x)
-  # Vector to store the fitted residuals
-  e_hat <- rep(0, q)
-  # Vector to store the fitted time series
-  x_hat <- x
-  # Initialize the state vector
-  x_t <- c()
-  if (p > 0){
-    x_t <- c(x_t, x[k:(k-p+1)])
-  }
-  if (q > 0){
-    x_t <- c(x_t, rep(0, q))
-  }
-  # Intercept vector
-  c_ <- matrix(c(intercept, rep(0, p+q-1)), ncol = 1)
-  for(i in (k + 1):n){
-    # Next step state space vector
-    x_t <-  A %*% x_t + c_
-    # Fitted series
-    x_hat[i] <- x_t[1,1]
-    # Fitted residuals
-    e_hat[i] <- x[i] - x_hat[i]
-    # Update state vector
-    x_t <- x_t + b * e_hat[i]
-  }
-  x_hat
+  # Companion matrix
+  A <- as.matrix(A); storage.mode(A) <- "double"
+  .Call("ARMA_filter_c",
+        A,
+        as.numeric(b),
+        as.numeric(x),
+        as.integer(p),
+        as.integer(q),
+        as.numeric(intercept))
 }
 
 #' Compute the Jacobian for ARMA coefficients
@@ -327,65 +307,31 @@ ARMA_jacobian_params <- function(x, eps, ARMA){
   return(J_phi_theta)
 }
 
-#' Iterative forecast ARMA
+#' Fast ARMA state-space h-step forecast and weights (C/BLAS)
 #'
-#' @inheritParams ARMA_expectation
-#' @keywords ARMA
-#' @note Version 1.0.0.
+#' @param h Integer, steps ahead.
+#' @param X0 Numeric vector of length p+q (state).
+#' @param A  Numeric (p+q) x (p+q) companion matrix.
+#' @param b  Numeric vector length p+q (shocks selector).
+#' @param intercept Scalar intercept (0 if none).
+#' @examples
+#' h <- 1000
+#' X0 <- c(0.2, 0.1)
+#' A <- ARMA_companion_matrix(0.2, 0.1)
+#' b <- ARMA_vector_b(1,1)
+#' ARMA_forecast(h, X0, A, b, intercept = 0)
+#'
 #' @export
-#' @noRd
-ARMA_forecast <- function(h = 1, X0, A, b, intercept = 0){
-  # Initialize an object
-  df_tT <- dplyr::tibble(step = 1:h, intercept = 0, Yt_tilde_hat = 0, psi_j = 1, psi2_j = 1)
-  # State vector
-  X0 <- matrix(X0, ncol = 1)
-  # *******************************************************************************
-  #  ARMA summations
-  # *******************************************************************************
-  # Identity matrix
-  I <- diag(1, nrow(A), ncol(A))
-  # Residuals vector for mean
-  b <- matrix(b, ncol = 1)
-  # Residuals matrix for variance
-  bb <- b %*% t(b)
-  # Extract first component
-  e1 <- matrix(c(1, rep(0, length(b)-1)), ncol = 1)
-  # Transposed vector
-  e1T <- t(e1)
-  # Condition to denote if ARMA intercept is used
-  ARMA_intercept <- intercept != 0
-
-  if (h == 1){
-    df_tT$Yt_tilde_hat <- (e1T %*% A %*% X0)[[1]]
-    if (ARMA_intercept) {
-      df_tT$ARMA_intercept <- e1T %*% (A %*% (e1 * intercept))
-    }
-  } else {
-    # Matrix powers
-    A_pow_hj <- A_pow_j <- list()
-    # Initialization
-    A_pow_hj[[1]] <- I
-    A_pow_j[[1]] <- A
-    for(j in 2:h) {
-      A_pow_hj[[j]] <- A %*% A_pow_hj[[j-1]]
-      A_pow_j[[j]] <- A %*% A_pow_hj[[j]]
-    }
-    # Compute ARMA weighs
-    for(j in h:1) {
-      df_tT$psi_j[j] <- (e1T %*% (A_pow_hj[[h-j+1]] %*% b))[[1]]
-      df_tT$psi2_j[j] <- e1T %*% (A_pow_hj[[h-j+1]] %*% bb %*% t(A_pow_hj[[h-j+1]])) %*% e1
-      # Forecasted value
-      df_tT$Yt_tilde_hat[j] <- (e1T %*% A_pow_j[[j]] %*% X0)[[1]]
-      # Intercept contribution
-      if (ARMA_intercept) {
-        df_tT$ARMA_intercept[j] <- e1T %*% (A_pow_j[[j]] %*% (e1 * intercept))
-      }
-    }
-  }
-
-  df_T <- tail(df_tT, 1)[, c(1, 3)]
+ARMA_forecast <- function(h, X0, A, b, intercept = 0) {
+  A <- as.matrix(A)
+  storage.mode(A) <- "double"
+  df_tT <- .Call("ARMA_forecast_c", A, as.numeric(X0), as.numeric(b), as.integer(h), as.numeric(intercept))
+  df_tT <- dplyr::bind_rows(df_tT)
+  # Add step
+  df_tT$step <- 1:h
+  df_T <- tail(df_tT, 1)[, c(5, 1)]
   df_T$weights <- list(df_tT)
-  return(df_T)
+  df_T
 }
 
 #' Compute the long-term variance of an AR model

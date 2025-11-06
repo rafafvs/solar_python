@@ -63,6 +63,7 @@ ARMA_zeta_to_phi_jacobian <- function(zeta){
        J_phi_kappa = J_phi_kappa,
        J_phi_zeta  = J_phi_zeta)
 }
+
 # From constraint to uncontraint parameters
 ARMA_phi_to_zeta <- function(phi){
   p <- length(phi)
