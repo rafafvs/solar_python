@@ -123,8 +123,6 @@ solarModel <- R6::R6Class("solarModel",
                                                     data[["date"]],
                                                     self$spec$coords$lat,
                                                     data[["clearsky"]])
-                              # Optimize the parameters
-                              #seasonal_model_Ct <- clearsky_optimizer(seasonal_model_Ct, private$..data, control$ntol)
                               # **************************************************** #
                               # Private components
                               # Add seasonal clear sky max to seasonal data

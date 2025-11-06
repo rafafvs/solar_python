@@ -1,0 +1,141 @@
+---
+title: "seasonalClearsky"
+author: "Beniamino Sartini"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r}
+library(tidyverse)
+library(solarr)
+```
+
+## Inputs 
+
+```{r}
+# Control parameters
+control <- control_seasonalClearsky(order = 1, order_H0 = 2, period = 365, 
+                                    include.intercept = TRUE, include.trend = FALSE,
+                                    delta0 = 1.4, lower = 0, upper = 3, by = 0.001, ntol = 10, quiet = FALSE)
+# GHI time series 
+GHI <- spec$data$GHI
+# Sequence of dates 
+date <- spec$data$date
+# Reference latitude for extraterrestrial radiation  
+lat <- spec$coords$lat
+# Clear sky time series 
+clearsky <- spec$data$clearsky
+```
+
+## Fit the clear sky model 
+
+```{r}
+# Initialize the model 
+clearsky_model <- seasonalClearsky$new(control = control)
+# Test the function
+#self <- clearsky_model$.__enclos_env__$self
+#private <- clearsky_model$.__enclos_env__$private
+#super <- clearsky_model$.__enclos_env__$super
+# Fit the parameters
+clearsky_model$fit(GHI, date, lat, clearsky)
+clearsky_model
+```
+
+```{r}
+# Extract data from the specification
+data <- spec$data
+data$Ct <- clearsky_model$predict(data$n)
+```
+
+
+```{r}
+plot_1 <- data %>%
+dplyr::filter(date >= "2020-01-01" & date <= "2021-01-01")%>%
+  ggplot()+
+  geom_line(aes(n, clearsky, color = "CAMS"))+
+  geom_line(aes(n, GHI, color = "GHI"))+
+  scale_color_manual(values = c(CAMS = "blue", GHI = "black"))+
+  labs(color = "", x = "Day of the year", y = "Clear sky")+
+  theme_bw()+
+  theme(legend.position = "top")
+
+plot_2 <- data %>%
+dplyr::filter(date >= "2020-01-01" & date <= "2021-01-01")%>%
+  ggplot()+
+  geom_line(aes(n, Ct, color = "Fitted"))+
+  geom_line(aes(n, clearsky, color = "CAMS"))+
+  scale_color_manual(values = c(Fitted = "red", CAMS = "blue"))+
+  labs(color = "", x = "Day of the year", y = "Clear sky")+
+  theme_bw()+
+  theme(legend.position = "top")
+
+plot_3 <- data %>%
+dplyr::filter(date >= "2020-01-01" & date <= "2021-01-01")%>%
+  ggplot()+
+  geom_line(aes(n, Ct, color = "Fitted"))+
+  geom_line(aes(n, GHI, color = "GHI"))+
+  scale_color_manual(values = c(Fitted = "red", GHI = "black"))+
+  labs(color = "", x = "Day of the year", y = "Clear sky")+
+  theme_bw()+
+  theme(legend.position = "top")
+gridExtra::grid.arrange(plot_1, plot_2, plot_3, nrow = 1)
+```
+
+### Test: imputed outliers 
+
+```{r}
+# Impute outliers
+data <- spec$data
+data$Ct <- clearsky_model$predict(data$n)
+outliers <- clearsky_outliers(data[[spec$target]], data$Ct, data$date, quiet = TRUE)
+data[[spec$target]] <- outliers$x
+# Test tolerance parameter
+cat(paste0("\033[1;35m---------------\033[0m", "\033[1;32m  Test clearskyModel_control and clearskyModel_fit \033[1;35m---------------\033[0m \n"))
+test_msg <- paste0("Check if the number of outliers imputed is below ", control$ntol, "...", "(", outliers$n, ") ",
+                   ifelse(outliers$n <= control$ntol, "\033[1;32mPassed\033[0m!\n", "\033[1;31mNOT passed\033[0m! \n\n"))
+cat(test_msg)
+```
+
+### Test: delta parameter 
+
+```{r}
+# Test delta parameter
+delta <- clearsky_model$.__enclos_env__$private$delta
+test_delta <- delta > control$lower & delta < control$upper
+test_msg <- paste0("Check if the parameter delta is inside lower (", control$lower, ") and upper (", control$upper,")",
+                   "...", "(", delta, ") ",
+                   ifelse(test_delta, "\033[1;32mPassed\033[0m!\n", "\033[1;31mNOT passed\033[0m! \n\n"))
+cat(test_msg)
+```
+
+### Test: order of seasonal components
+
+```{r}
+# Count the number of parameters 
+n.params_target <- ifelse(control$include.intercept, 1, 0)
+n.params_target <- n.params_target + ifelse(control$include.trend, 1, 0)
+n.params_target <- n.params_target + control$order * 2
+n.params_target <- n.params_target + control$order_H0 
+# Test if the number of parameters is correct 
+n.params <- length(clearsky_model$coefficients)
+# Print result 
+test_msg <- paste0("Check if the number of parameters is equal to ", n.params_target, "...", "(", n.params, ") ",
+                   ifelse(n.params == n.params_target, "\033[1;32mPassed\033[0m!\n", "\033[1;31mNOT passed\033[0m! \n\n"))
+cat(test_msg)
+```
+
+## Differential
+
+Note differential when a trend is true is not implemented
+
+```{r}
+dt <- 0.00001
+n0 <- 34
+(clearsky_model$predict(n0+dt) - clearsky_model$predict(n0)) / dt
+clearsky_model$differential(n0)
+```
+

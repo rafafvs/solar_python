@@ -12,7 +12,7 @@ The seasonal model is fitted using a specified formula, which allows for the inc
 to model seasonal variations. The periodicity can be customized, and the model can be updated with new coefficients after the initial fit.
 }
 \note{
-Version 1.0.0
+Version 1.0.1
 }
 \examples{
 sm <- seasonalModel$new(1, 365)
@@ -38,13 +38,13 @@ sm$predict(20)
 \describe{
 \item{\code{coefficients}}{Named vector, fitted coefficients.}
 
-\item{\code{coefficients2}}{Named vector, reparametrized coefficients into a linear combination of shifted sine functions.}
-
 \item{\code{model}}{A slot with the fitted \code{lm} object.}
 
 \item{\code{period}}{Integer scalar, periodicity of the seasonality.}
 
 \item{\code{order}}{Integer scalar, number of combinations of sines and cosines.}
+
+\item{\code{omega}}{Integer, periodicity.}
 
 \item{\code{std.errors}}{Named vector, with the parameters' std. errors.}
 
@@ -57,7 +57,6 @@ sm$predict(20)
 \itemize{
 \item \href{#method-seasonalModel-new}{\code{seasonalModel$new()}}
 \item \href{#method-seasonalModel-fit}{\code{seasonalModel$fit()}}
-\item \href{#method-seasonalModel-fit_differential}{\code{seasonalModel$fit_differential()}}
 \item \href{#method-seasonalModel-predict}{\code{seasonalModel$predict()}}
 \item \href{#method-seasonalModel-differential}{\code{seasonalModel$differential()}}
 \item \href{#method-seasonalModel-update}{\code{seasonalModel$update()}}
@@ -111,35 +110,12 @@ If not found in data, the variables are taken from environment(formula), typical
 }
 }
 \if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-seasonalModel-fit_differential"></a>}}
-\if{latex}{\out{\hypertarget{method-seasonalModel-fit_differential}{}}}
-\subsection{Method \code{fit_differential()}}{
-Fit the differential of the sinusoidal function.
-\subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{seasonalModel$fit_differential(formula, data, ...)}\if{html}{\out{</div>}}
-}
-
-\subsection{Arguments}{
-\if{html}{\out{<div class="arguments">}}
-\describe{
-\item{\code{formula}}{formula, an object of class \code{formula} (or one that can be coerced to that class).
-It is a symbolic description of the model to be fitted and can be used to include or exclude the intercept or external regressors in \code{data}.}
-
-\item{\code{data}}{an optional data frame, list or environment (or object coercible by as.data.frame to a data frame) containing the variables in the model.
-If not found in data, the variables are taken from environment(formula), typically the environment from which \code{lm} is called.}
-
-\item{\code{...}}{other parameters to be passed to the function \code{lm}.}
-}
-\if{html}{\out{</div>}}
-}
-}
-\if{html}{\out{<hr>}}
 \if{html}{\out{<a id="method-seasonalModel-predict"></a>}}
 \if{latex}{\out{\hypertarget{method-seasonalModel-predict}{}}}
 \subsection{Method \code{predict()}}{
 Predict method for the class \code{seasonalModel}.
 \subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{seasonalModel$predict(n, newdata, dt = 1)}\if{html}{\out{</div>}}
+\if{html}{\out{<div class="r">}}\preformatted{seasonalModel$predict(n, newdata)}\if{html}{\out{</div>}}
 }
 
 \subsection{Arguments}{
@@ -149,8 +125,6 @@ Predict method for the class \code{seasonalModel}.
 
 \item{\code{newdata}}{an optional data frame, list or environment (or object coercible by as.data.frame to a data frame) containing the variables in the model.
 If not found in data, the variables are taken from environment(formula), typically the environment from which \code{lm} is called.}
-
-\item{\code{dt}}{Numeric, time step.}
 }
 \if{html}{\out{</div>}}
 }
@@ -161,7 +135,7 @@ If not found in data, the variables are taken from environment(formula), typical
 \subsection{Method \code{differential()}}{
 Compute the differential of the sinusoidal function.
 \subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{seasonalModel$differential(n, newdata, dt = 1)}\if{html}{\out{</div>}}
+\if{html}{\out{<div class="r">}}\preformatted{seasonalModel$differential(n, newdata)}\if{html}{\out{</div>}}
 }
 
 \subsection{Arguments}{
@@ -171,8 +145,6 @@ Compute the differential of the sinusoidal function.
 
 \item{\code{newdata}}{an optional data frame, list or environment (or object coercible by as.data.frame to a data frame) containing the variables in the model.
 If not found in data, the variables are taken from environment(formula), typically the environment from which \code{lm} is called.}
-
-\item{\code{dt}}{Numeric, time step.}
 }
 \if{html}{\out{</div>}}
 }

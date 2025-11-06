@@ -21,7 +21,7 @@
 #' @rdname seasonalModel
 #' @name seasonalModel
 #' @keywords seasonalModel
-#' @note Version 1.0.0
+#' @note Version 1.0.1
 #' @export
 seasonalModel <- R6::R6Class("seasonalModel",
                              public = list(
@@ -47,12 +47,13 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                #' @param ... other parameters to be passed to the function `lm`.
                                fit = function(formula, data, ...){
                                  # Formula with standard names
-                                 base_formula <- formula
+                                 base_formula <- base_formula_dt <- formula
                                  if (length(self$order) == 1) {
                                    for(period in self$period) {
                                      for (order in self$order){
                                        for(i in 1:order){
-                                         base_formula <- formula_fourier(base_formula, order = i, period = period)
+                                         base_formula <- seasonalModel_formula(base_formula, order = i, period = period)
+                                         base_formula_dt <- seasonalModel_formula_dt(base_formula_dt, order = i, period = period)
                                        }
                                      }
                                    }
@@ -60,15 +61,28 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                    for(j in 1:length(self$period)) {
                                      period <- self$period[j]
                                      for (i in 1:self$order[j]){
-                                       base_formula <- formula_fourier(base_formula, order = i, period = period)
+                                       base_formula <- seasonalModel_formula(base_formula, order = i, period = period)
+                                       base_formula_dt <- seasonalModel_formula_dt(base_formula_dt, order = i, period = period)
                                      }
                                    }
                                  }
-                                 # Store the formula
+                                 # Store the main formula
                                  private$mformula <- as.formula(base_formula)
                                  attr(private$mformula, "coef_names") <- attr(base_formula, "coef_names")
                                  # Fit seasonal model
-                                 private$..model <- lm(private$mformula, data = data)#, ...)
+                                 private$..model <- lm(private$mformula, data = data)
+
+                                 # Fit the differential w.r.t. t
+                                 private$dformula <- as.formula(base_formula_dt)
+                                 attr(private$dformula, "coef_names") <- attr(base_formula_dt, "coef_names")
+                                 private$..dmodel <- lm(private$dformula, data = data)
+                                 # Update coefficients
+                                 dcoefs <- private$..model$coefficients
+                                 names(dcoefs) <- names(private$..dmodel$coefficients)
+                                 dcoefs[stringr::str_detect(names(dcoefs), "sin")] <- -dcoefs[stringr::str_detect(names(dcoefs), "sin")]
+                                 dcoefs[stringr::str_detect(names(dcoefs), "(Intercept)")] <- 0
+                                 private$..dmodel$coefficients <- dcoefs
+
                                  # Detect number of regressors
                                  n_regressors <- length(private$..model$coefficients)
                                  # Extract regressors from the formula excluding target variable
@@ -96,71 +110,11 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                  names(private$..std.errors) <- names(self$coefficients)
                                },
                                #' @description
-                               #' Fit the differential of the sinusoidal function.
-                               #' @param formula formula, an object of class `formula` (or one that can be coerced to that class).
-                               #' It is a symbolic description of the model to be fitted and can be used to include or exclude the intercept or external regressors in `data`.
-                               #' @param data an optional data frame, list or environment (or object coercible by as.data.frame to a data frame) containing the variables in the model.
-                               #' If not found in data, the variables are taken from environment(formula), typically the environment from which `lm` is called.
-                               #' @param ... other parameters to be passed to the function `lm`.
-                               fit_differential = function(formula, data, ...){
-                                 # Extract seasonal regressors
-                                 regressors <- formula.tools::get.vars(formula(private$..model))[-c(1)]
-                                 seasonal_regressors <- which(stringr::str_detect(regressors, "sin|cos")) + 1
-                                 external_regressors <- which(!stringr::str_detect(regressors, "sin|cos")) + 1
-                                 # Reparametrize the coefficients
-                                 coefs <- private$..model$coefficients[c(1, seasonal_regressors)]
-                                 index <- seq(1, length(coefs)-1, by = 2)
-                                 param <- c(private$..model$coefficients[c(1, external_regressors)])
-                                 names(param) <- c("A", names(private$..model$coefficients[external_regressors]))
-                                 k <- 1
-                                 i <- 1
-                                 for(i in index){
-                                   coefs_names <- names(param)
-                                   param <- c(param, sqrt(coefs[i + 1]^2 + coefs[i + 2]^2))
-                                   param <- c(param, atan(coefs[i + 2]/coefs[i + 1]) + ifelse(coefs[i + 1] < 0, -base::pi, 0))
-                                   names(param) <- c(coefs_names, paste0(c("B", "phi"), k))
-                                   k <- k + 1
-                                 }
-                                 # Reparametrize the coefficients
-                                 coefs <- param
-                                 coef_phi <- coefs[stringr::str_detect(names(coefs), "phi")]
-                                 coef_B <- coefs[stringr::str_detect(names(coefs), "B")]
-                                 # Formula with standard names
-                                 base_formula <- paste0(formula.tools::lhs(private$mformula), " ~ - 1")
-                                 k <- 1
-                                 if (length(self$order) == 1) {
-                                   for(period in self$period) {
-                                     for (order in self$order){
-                                       for(i in 1:order){
-                                         base_formula <- formula_fourier(base_formula, order = i, reparam = TRUE, period = period, phi = coef_phi[k])
-                                         k <- k + 1
-                                       }
-                                     }
-                                   }
-                                 } else if (length(self$order) == length(self$period)) {
-                                   for(j in 1:length(self$period)) {
-                                     period <- self$period[j]
-                                     for (i in 1:self$order[j]){
-                                       base_formula <- formula_fourier(base_formula, order = i, reparam = TRUE, period = period, phi = coef_phi[k])
-                                       k <- k + 1
-                                     }
-                                   }
-                                 }
-                                 # Store the formula
-                                 private$dformula <- as.formula(paste0(base_formula, " - 1"))
-                                 attr(private$mformula, "coef_names") <- paste0("B_", attr(base_formula, "coef_names"))
-                                 # Fit seasonal model
-                                 private$..dmodel <- lm(private$dformula, data = data)
-                                 names(coef_B) <- names(private$..dmodel$coefficients)
-                                 private$..dmodel$coefficients <- coef_B
-                               },
-                               #' @description
                                #' Predict method for the class `seasonalModel`.
                                #' @param n Integer vector, numbers of day of the year.
                                #' @param newdata an optional data frame, list or environment (or object coercible by as.data.frame to a data frame) containing the variables in the model.
                                #' If not found in data, the variables are taken from environment(formula), typically the environment from which `lm` is called.
-                               #' @param dt Numeric, time step.
-                               predict = function(n, newdata, dt = 1){
+                               predict = function(n, newdata){
                                  if (missing(newdata)) {
                                    if (missing(n)) {
                                      predict.lm(private$..model)
@@ -176,8 +130,7 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                #' @param n Integer, number of day of the year.
                                #' @param newdata an optional data frame, list or environment (or object coercible by as.data.frame to a data frame) containing the variables in the model.
                                #' If not found in data, the variables are taken from environment(formula), typically the environment from which `lm` is called.
-                               #' @param dt Numeric, time step.
-                               differential = function(n, newdata, dt = 1){
+                               differential = function(n, newdata){
                                  if (missing(newdata)) {
                                    if (missing(n)) {
                                      predict.lm(private$..dmodel)
@@ -192,49 +145,55 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                #' Update the model's parameters.
                                #' @param coefficients Named vector, new parameters.
                                update = function(coefficients){
-                                 old_coef <- self$coefficients
-                                 # Check length
-                                 condition <- length(old_coef) == length(coefficients)
-                                 if (!condition) {
-                                   cli::cli_alert_danger("In seasonalModel$update(): The lenght of new `coefficients` do not match the length of the old coefficients.")
-                                   return(invisible(NULL))
+                                 # Extract old coefficients
+                                 new_coefs <- self$coefficients
+                                 # Extract names
+                                 names_old <- names(new_coefs)
+                                 names_new <- names(coefficients)
+                                 # Warning
+                                 if (length(names_new) != length(names_old)) {
+                                   cli::cli_alert_warning("In seasonalModel$update(): The lenght of new `coefficients` do not match the length of the old coefficients.")
                                  }
-                                 # Check names
-                                 condition <- names(old_coef) %in% names(coefficients)
-                                 condition <- sum(condition) == length(coefficients)
-                                 if (!condition) {
-                                   cli::cli_alert_warning("In seasonalModel$update(): The names of new `coefficients` do not match the names of the old coefficients.")
-                                   return(invisible(NULL))
-                                 }
-                                 # Ensure that the parameters are correctly ordered
-                                 new_coef <- coefficients[names(old_coef)]
-                                 # Set std.errors of the parameters that are changed equal to NA
-                                 idx_new_coefs <- which(new_coef != old_coef)
-                                 if (!purrr::is_empty(idx_new_coefs)) {
-                                   private$..std.errors[idx_new_coefs] <- NA
+                                 # Update only if they are present
+                                 for(i in 1:length(coefficients)){
+                                   if (names_new[i] %in% names_old) {
+                                     new_coefs[names_new[i]] <- coefficients[i]
+                                     private$..std.errors[names_new[i]] <- NA_integer_
+                                   }
                                  }
                                  # Set the names equal to the original one
-                                 names(new_coef) <- names(private$..model$coefficients)
+                                 names(new_coefs) <- names(private$..model$coefficients)
                                  # Update the parameters inside the lm object
-                                 private$..model$coefficients <- new_coef
-                                 # Set std.errors of the parameters that are changed equal to NA
-                                 idx_new_coefs <- which(new_coef != old_coef)
-                                 if (!purrr::is_empty(idx_new_coefs)) {
-                                   private$..std.errors[idx_new_coefs] <- NA
-                                 }
+                                 private$..model$coefficients <- new_coefs
+
+                                 # Update coefficients of the differential
+                                 dcoefs <- new_coefs
+                                 names(dcoefs) <- names(private$..dmodel$coefficients)
+                                 dcoefs[stringr::str_detect(names(dcoefs), "sin")] <- -dcoefs[stringr::str_detect(names(dcoefs), "sin")]
+                                 dcoefs[stringr::str_detect(names(dcoefs), "(Intercept)")] <- 0
+                                 private$..dmodel$coefficients <- dcoefs
                                },
                                #' @description
                                #' Update the parameter's std. errors.
                                #' @param std.errors Named vector, new standard errors of the parameters.
                                update_std.errors = function(std.errors){
-                                 if (!missing(std.errors)) {
-                                   # Update the vector of std. errors
-                                   std.errors_updated <- self$coefficients
-                                   std.errors_updated[!(names(std.errors_updated) %in% names(std.errors))] <- NA_integer_
-                                   std.errors_updated[names(std.errors_updated) %in% names(std.errors)] <- std.errors
-                                   # Update private std. errors
-                                   private$..std.errors <- std.errors_updated
+                                 # Extract old coefficients
+                                 new_std.errors <- self$std.errors
+                                 # Extract names
+                                 names_old <- names(new_std.errors)
+                                 names_new <- names(std.errors)
+                                 # Warning
+                                 if (length(names_new) != length(names_old)) {
+                                   cli::cli_alert_warning("In seasonalModel$update_std.errors(): The lenght of new `std.errors` do not match the length of the old std. errors!")
                                  }
+                                 # Update only if they are present
+                                 for(i in 1:length(std.errors)){
+                                   if (names_new[i] %in% names_old) {
+                                     new_std.errors[names_new[i]] <- std.errors[i]
+                                   }
+                                 }
+                                 # Update private std. errors
+                                 private$..std.errors <- new_std.errors
                                },
                                #' @description
                                #' Print method for the class `seasonalModel`.
@@ -254,7 +213,7 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                }
                              ),
                              private = list(
-                               version = "1.0.0",
+                               version = "1.0.1",
                                ..model = NA,
                                ..dmodel = NA,
                                mformula = NA,
@@ -262,7 +221,6 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                ..period = 1,
                                ..order = 365,
                                ..std.errors = c(),
-                               ..coefficients2 = NA,
                                external_regressors = NA
                              ),
                              active = list(
@@ -271,10 +229,6 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                  coefs <- private$..model$coefficients
                                  names(coefs) <- private$..model$coefficients_names
                                  return(coefs)
-                               },
-                               #' @field coefficients2 Named vector, reparametrized coefficients into a linear combination of shifted sine functions.
-                               coefficients2 = function(){
-                                 private$..coefficients2
                                },
                                #' @field model A slot with the fitted `lm` object.
                                model = function(){
@@ -287,6 +241,10 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                #' @field order Integer scalar, number of combinations of sines and cosines.
                                order = function(){
                                  private$..order
+                               },
+                               #' @field omega Integer, periodicity.
+                               omega = function(){
+                                 2 * base::pi / private$..period
                                },
                                #' @field std.errors Named vector, with the parameters' std. errors.
                                std.errors = function(){
@@ -302,46 +260,3 @@ seasonalModel <- R6::R6Class("seasonalModel",
                                }
                              )
 )
-
-#' Create a custom fourier formula
-#'
-#' @keywords seasonalModel
-#' @noRd
-formula_fourier <- function(formula, reparam = FALSE, order = 1, period = 365, phi = 0, sin = TRUE, cos = TRUE, t_idx = "n"){
-  if (order == 0) {
-    return(formula)
-  }
-  coefs_names <- c()
-  base_formula <- formula
-  if (!reparam) {
-    if (sin) {
-      # Standard name
-      new_coef_name <- paste0("sin_", order, "_", period)
-      # Check if it was not included
-      if (!new_coef_name %in% attr(base_formula, "coef_names")){
-        base_formula <- paste0(base_formula, " + ", "I(sin(2 * base::pi /", eval(period), " * ", t_idx, " * ", eval(order), "))")
-        coefs_names <- c(coefs_names, new_coef_name)
-      }
-    }
-    if (cos) {
-      # Standard name
-      new_coef_name <- paste0("cos_", order, "_", period)
-      # Check if it was not included
-      if (!new_coef_name %in% attr(base_formula, "coef_names")){
-        base_formula <- paste0(base_formula, " + ", "I(cos(2 * base::pi /", eval(period), " * ", t_idx, " * ", eval(order), "))")
-        coefs_names <- c(coefs_names, new_coef_name)
-      }
-    }
-  } else {
-    # Standard name
-    new_coef_name <- paste0("cos_", order, "_", period)
-    # Check if it was not included
-    if (!new_coef_name %in% attr(base_formula, "coef_names")){
-      base_formula <- paste0(base_formula, " + ", "I(2 * base::pi / ", eval(period),
-                             "*cos(2 * base::pi / ", eval(period), " * ", t_idx, " * ", eval(order), " + ", eval(phi),"))")
-      coefs_names <- c(coefs_names, new_coef_name)
-    }
-  }
-  attr(base_formula, "coef_names") <- c(attr(formula, "coef_names"), coefs_names)
-  return(base_formula)
-}

@@ -9,7 +9,7 @@ R6 implementation for a clear sky seasonal model
 R6 implementation for a clear sky seasonal model
 }
 \note{
-Version 1.0.0
+Version 1.0.1
 }
 \keyword{clearsky}
 \section{Super class}{
@@ -37,6 +37,7 @@ Version 1.0.0
 \item \href{#method-seasonalClearsky-new}{\code{seasonalClearsky$new()}}
 \item \href{#method-seasonalClearsky-fit}{\code{seasonalClearsky$fit()}}
 \item \href{#method-seasonalClearsky-predict}{\code{seasonalClearsky$predict()}}
+\item \href{#method-seasonalClearsky-differential}{\code{seasonalClearsky$differential()}}
 \item \href{#method-seasonalClearsky-print}{\code{seasonalClearsky$print()}}
 \item \href{#method-seasonalClearsky-clone}{\code{seasonalClearsky$clone()}}
 }
@@ -44,8 +45,6 @@ Version 1.0.0
 \if{html}{\out{
 <details open><summary>Inherited methods</summary>
 <ul>
-<li><span class="pkg-link" data-pkg="solarr" data-topic="seasonalModel" data-id="differential"><a href='../../solarr/html/seasonalModel.html#method-seasonalModel-differential'><code>solarr::seasonalModel$differential()</code></a></span></li>
-<li><span class="pkg-link" data-pkg="solarr" data-topic="seasonalModel" data-id="fit_differential"><a href='../../solarr/html/seasonalModel.html#method-seasonalModel-fit_differential'><code>solarr::seasonalModel$fit_differential()</code></a></span></li>
 <li><span class="pkg-link" data-pkg="solarr" data-topic="seasonalModel" data-id="update"><a href='../../solarr/html/seasonalModel.html#method-seasonalModel-update'><code>solarr::seasonalModel$update()</code></a></span></li>
 <li><span class="pkg-link" data-pkg="solarr" data-topic="seasonalModel" data-id="update_std.errors"><a href='../../solarr/html/seasonalModel.html#method-seasonalModel-update_std.errors'><code>solarr::seasonalModel$update_std.errors()</code></a></span></li>
 </ul>
@@ -98,6 +97,25 @@ Fit the seasonal model for clear sky radiation.
 Predict method for \code{seasonalClearsky} object.
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{seasonalClearsky$predict(n, newdata)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{n}}{Integer, scalar or vector. number of day of the year.}
+
+\item{\code{newdata}}{An optional data frame in which to look for variables with which to predict. If omitted, the fitted values are used.}
+}
+\if{html}{\out{</div>}}
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-seasonalClearsky-differential"></a>}}
+\if{latex}{\out{\hypertarget{method-seasonalClearsky-differential}{}}}
+\subsection{Method \code{differential()}}{
+Differential method for \code{seasonalClearsky} object.
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{seasonalClearsky$differential(n, newdata)}\if{html}{\out{</div>}}
 }
 
 \subsection{Arguments}{

@@ -3,7 +3,7 @@
 #' @rdname seasonalClearsky
 #' @name seasonalClearsky
 #' @keywords clearsky
-#' @note Version 1.0.0
+#' @note Version 1.0.1
 #' @export
 seasonalClearsky <- R6::R6Class("seasonalClearsky",
                                 inherit = seasonalModel,
@@ -100,15 +100,16 @@ seasonalClearsky <- R6::R6Class("seasonalClearsky",
                                     if (self$order > 0) {
                                       coefs_names <- c(coefs_names, paste0("delta_", orig_names))
                                     }
+
                                     # Store original coefficients
                                     private$coefficients_orig <- self$coefficients
                                     # Store delta parameter
                                     private$delta <- delta * control$delta0
                                     # Update coefficients values and names
-                                    super$.__enclos_env__$private$..model$coefficients <- super$.__enclos_env__$private$..model$coefficients * private$delta
+                                    super$update(super$.__enclos_env__$private$..model$coefficients * private$delta)
                                     super$.__enclos_env__$private$..model$coefficients_names <- coefs_names
                                     # Update std errors values and names
-                                    super$.__enclos_env__$private$..std.errors <- super$.__enclos_env__$private$..std.errors * private$delta
+                                    super$update_std.errors(super$.__enclos_env__$private$..std.errors * private$delta)
                                     names(super$.__enclos_env__$private$..std.errors) <- coefs_names
                                   },
                                   #' @description
@@ -140,6 +141,34 @@ seasonalClearsky <- R6::R6Class("seasonalClearsky",
                                     }
                                   },
                                   #' @description
+                                  #' Differential method for `seasonalClearsky` object.
+                                  #' @param n Integer, scalar or vector. number of day of the year.
+                                  #' @param newdata An optional data frame in which to look for variables with which to predict. If omitted, the fitted values are used.
+                                  differential = function(n, newdata){
+                                    if (missing(newdata)) {
+                                      if (missing(n)) {
+                                        predict.lm(private$..dmodel)
+                                      } else {
+                                        H0 <- self$ssf$Hon(n, self$lat, deriv = TRUE)
+                                        newdata <- data.frame(n = n, H0 = H0)
+                                        if (self$control$order_H0 > 1){
+                                          for(i in 2:self$control$order_H0){
+                                            newdata[[paste0("H0_", i)]] <- newdata$H0^i
+                                          }
+                                        }
+                                        predict.lm(private$..dmodel, newdata = newdata)
+                                      }
+                                    } else {
+                                      newdata$H0 <- self$ssf$Hon(newdata$n, self$lat, deriv = TRUE)
+                                      if (self$control$order_H0 > 1){
+                                        for(i in 2:self$control$order_H0){
+                                          newdata[[paste0("H0_", i)]] <- i * newdata$H0^(i-1)
+                                        }
+                                      }
+                                      predict.lm(private$..dmodel, newdata = newdata)
+                                    }
+                                  },
+                                  #' @description
                                   #' Print method for `seasonalClearsky` object.
                                   print = function(){
                                     cat(paste0("----------------------- seasonalClearsky ----------------------- \n"))
@@ -152,7 +181,7 @@ seasonalClearsky <- R6::R6Class("seasonalClearsky",
                                   }
                                 ),
                                 private = list(
-                                  version = "1.0.0",
+                                  version = "1.0.1",
                                   coefficients_orig = NA,
                                   delta = NA,
                                   ..ssf = NA,

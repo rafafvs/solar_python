@@ -1,0 +1,216 @@
+---
+title: "solarModel"
+author: "Beniamino Sartini"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  message = FALSE, 
+  warning = FALSE,
+  collapse = TRUE,
+  comment = "#>"
+)
+library(solarr)
+library(ggplot2)
+```
+
+## Model's fit 
+
+### Specification 
+
+Let's start by creating a specification object
+```{r}
+spec <- solarModel_spec$new()
+spec$set_mean.model(arOrder = 1, maOrder = 0)
+spec$set_seasonal.mean(monthly.mean = FALSE)
+spec$set_seasonal.variance(monthly.mean = FALSE)
+spec$specification("Bologna", from="2005-01-01", to="2022-01-01")
+```
+
+```{r, echo=FALSE, results='asis'}
+library(fansi)
+# Run your colored output function, capturing the console text
+txt <- capture.output(spec)
+# Convert ANSI color codes (\[1;31m etc.) to HTML <span> styles
+html_txt <- fansi::sgr_to_html(txt)
+# Print as HTML so it renders properly
+cat(html_txt, sep = "<br>\n")
+```
+
+### Estimation 
+
+Then, a solarModel can be fitted
+```{r}
+# Iniaitlize a solarModel object
+model <- solarModel$new(spec)
+# Fit the model
+model$fit()
+```
+
+```{r, echo=FALSE, results='asis'}
+library(fansi)
+# Run your colored output function, capturing the console text
+txt <- capture.output(model)
+# Convert ANSI color codes (\[1;31m etc.) to HTML <span> styles
+html_txt <- fansi::sgr_to_html(txt)
+# Print as HTML so it renders properly
+cat(html_txt, sep = "<br>\n")
+```
+The estimated parameters are obtained 
+```{r}
+dplyr::bind_cols(model$coefficients) %>%
+  tidyr::gather("parameter", "value") %>%
+  knitr::kable()
+```
+and the standard errors
+```{r}
+bind_rows(model$seasonal_model_Yt$tidy, model$ARMA$tidy, model$seasonal_variance$tidy, model$GARCH$tidy)
+```
+
+```{r}
+model$NM_model$std.errors %>%
+  knitr::kable()
+```
+
+### Active slots
+
+```{r}
+# Model's name 
+model$model_name
+# Reference location name
+model$place
+# Reference coordinates
+model$location
+```
+
+Data 
+```{r}
+bind_rows(
+  head(model$data, 5),
+  tail(model$data, 5)
+) %>%
+  knitr::kable()
+```
+
+Seasonal data 
+```{r}
+bind_rows(
+  head(model$seasonal_data, 5),
+  tail(model$seasonal_data, 5)
+) %>%
+  knitr::kable()
+```
+Monthly data
+```{r}
+bind_rows(
+  head(model$monthly_data, 5),
+  tail(model$monthly_data, 5)
+) %>%
+  knitr::kable()
+```
+Conditional moments
+```{r}
+bind_rows(
+  head(model$moments[[1]], 5),
+  tail(model$moments[[1]], 5)
+) %>%
+  knitr::kable()
+```
+
+### QMLE estimation 
+
+Total hessian and jacobians not implemented jet
+```{r}
+model$var_theta
+```
+With QMLE estimate the standard errors are updated inside each model
+```{r}
+model_QMLE <- solarModel_QMLE(model)
+```
+
+```{r}
+bind_rows(model_QMLE$seasonal_model_Yt$tidy, 
+          model_QMLE$ARMA$tidy, 
+          model_QMLE$seasonal_variance$tidy, 
+          model_QMLE$GARCH$tidy) %>%
+  knitr::kable()
+```
+
+## Diagnostic 
+
+### Distribution Tests: Normality 
+
+```{r}
+solarModel_test_distribution(model, "n", type = "train") %>%
+  knitr::kable()
+```
+
+### Distribution Tests: Gaussian Mixture 
+
+```{r}
+solarModel_test_distribution(model, "gm", type = "train") %>%
+  knitr::kable()
+```
+
+### Autocorrelation Tests: Ljung-Box
+
+```{r}
+solarModel_test_autocorr(model, method = "lb", lag.max = 30) %>%
+  knitr::kable()
+```
+
+### Autocorrelation Tests: Breush-Godfrey
+
+```{r}
+solarModel_test_autocorr(model, method = "bg", lag.max = 30) %>%
+  knitr::kable()
+```
+
+### Autocorrelation Tests: Breush-Pagan
+
+```{r}
+solarModel_test_autocorr(model, method = "bp", lag.max = 30) %>%
+  knitr::kable()
+```
+
+### PIT test 
+
+```{r}
+solarModel_test_PIT(model, 0.05, "full") %>%
+  knitr::kable()
+```
+
+### Log-predictive density 
+
+```{r}
+solarModel_test_LPD(model, "full") %>%
+  knitr::kable()
+```
+
+### Forecasts tests
+
+```{r}
+solarModel_test_forecast(model, 0.9, "full") %>%
+  knitr::kable()
+```
+
+
+## Scenarios 
+
+```{r}
+# Simulate scenarios 
+scenario <- solarScenario(model, from = "2022-01-01", to = "2023-01-01", nsim = 10, seed = 2, by = "1 year",
+                          quiet = TRUE)
+```
+
+```{r}
+solarScenario_plot(scenario)
+```
+
+

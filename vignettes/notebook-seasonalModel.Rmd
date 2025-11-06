@@ -1,0 +1,79 @@
+---
+title: "seasonalModel"
+author: "Beniamino Sartini"
+date: "`r Sys.Date()`"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Vignette Title}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(ggplot2)
+library(solarr)
+set.seed(1)
+# Simulate a periodic time series
+u <- rnorm(1000, 0, 1)
+n <- 1:length(u)
+x <- 5.9 + 0.2 * sin(2*base::pi/365 * n) + 0.9 * cos(2*base::pi/365 * n) + u
+ggplot()+
+  geom_point(aes(n, x))
+```
+
+## Fit a seasonal model 
+
+```{r}
+sm <- seasonalModel$new(order = 1)
+# Test the function
+#self <- sm$.__enclos_env__$self
+#private <- sm$.__enclos_env__$private
+formula <- "x ~ 1"
+data <- tibble(x = x, n = n)
+sm$fit(formula, data = data)
+sm
+```
+
+```{r}
+sm$coefficients
+sm$std.errors
+```
+
+```{r}
+ggplot()+
+  geom_point(aes(n, x))+
+  geom_line(aes(n, sm$predict(n)), color = "red")
+```
+
+## Differential 
+
+```{r}
+dt <- 0.0001
+n0 <- 4
+(sm$predict(n0 + dt) - sm$predict(n0))/dt
+sm$differential(n0)
+```
+
+## Update the parameters
+
+```{r}
+sm$update(c(sin_1_365 = 0.35))
+sm$coefficients["sin_1_365"] == 0.35
+
+sm$tidy
+sm$coefficients
+```
+
+```{r}
+dt <- 0.0001
+n0 <- 4
+(sm$predict(n0 + dt) - sm$predict(n0))/dt
+sm$differential(n0)
+```
+
+
+
