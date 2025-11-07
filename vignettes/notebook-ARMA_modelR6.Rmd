@@ -73,25 +73,25 @@ ARMA_variance(h = 1, A, b, sigma2 = 1)
 # 5 step ahead
 ARMA_variance(h = 5, A, b, sigma2 = 1)
 # 100 step ahead
-ARMA_variance(h = 100, A, b, sigma2 = 1)
+ARMA_variance(h = 10, A, b, sigma2 = 1)
 ```
 AR variance
 ```{r}
 # AR (1)
 phi <- 0.4
-ARMA_variance(1000, ARMA_companion_matrix(phi), ARMA_vector_b(1, 0))
+ARMA_variance(1000, ARMA_companion_matrix(phi), ARMA_vector_b(1, 0))[1000]
 AR_variance(phi, 1)
 # AR (2)
 phi <- c(phi, 0.1)
-ARMA_variance(1000, ARMA_companion_matrix(phi), ARMA_vector_b(2, 0))
+ARMA_variance(1000, ARMA_companion_matrix(phi), ARMA_vector_b(2, 0))[1000]
 AR_variance(phi, 1)
 # AR (3)
 phi <- c(phi, 0.05)
-ARMA_variance(1000, ARMA_companion_matrix(phi), ARMA_vector_b(3, 0))
+ARMA_variance(1000, ARMA_companion_matrix(phi), ARMA_vector_b(3, 0))[1000]
 AR_variance(phi, 1)
 # AR (4) (no good)
 phi <- c(phi, 0.03)
-ARMA_variance(10000, ARMA_companion_matrix(phi), ARMA_vector_b(4, 0))
+ARMA_variance(10000, ARMA_companion_matrix(phi), ARMA_vector_b(4, 0))[1000]
 AR_variance(phi, 1)
 ```
 ARMA covariances
@@ -103,8 +103,6 @@ ARMA_covariance(h = 5, 10, A, b, sigma2 = 1)
 # 100 step ahead
 ARMA_covariance(h = 100, 2, A, b, sigma2 = 1)
 ```
-
-
 
 
 ## Initialization 
@@ -126,7 +124,17 @@ arma$fit(x)
 # Function check
 # self <- arma$.__enclos_env__$self
 # private <- arma$.__enclos_env__$private
+arma$coefficients
+arma$std.errors
 ```
+```{r}
+fit <- ARMA_fit(x, arOrder = 1, maOrder = 2, method = c("CSS"))
+
+c(fit$phi, fit$theta)
+fit$std.errors$phi
+fit$std.errors_rob$phi
+```
+
 
 
 ```{r, echo=FALSE, results='asis'}
@@ -200,12 +208,12 @@ arma$next_step(X0, n.ahead = 1, eps = eps0)
 
 ```{r}
 # Create new coefficients
-arma$mean
+arma$expectation(1000)[1000]
 ```
 
 ```{r}
 # Create new coefficients
-arma$variance
+arma$variance(1000)[1000]
 ```
 
 ## Update parameters

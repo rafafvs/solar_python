@@ -15,8 +15,11 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             #' @param include.intercept Logical. When `TRUE` the intercept will be included. The default is `FALSE`.
                             initialize = function(arOrder = 1, maOrder = 1, include.intercept = FALSE){
                               private$include.intercept <- include.intercept
+                              # Store AR and MA orders
                               private$..arOrder <- arOrder
                               private$..maOrder <- maOrder
+                              # Pre-compute vector b
+                              private$..b <- ARMA_vector_b(arOrder, maOrder)
                             },
                             #' @description
                             #' Fit the ARMA model with `arima` function.
@@ -63,10 +66,14 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                               private$..intercept <- intercept
                               private$..phi <- phi
                               private$..theta <- theta
+                              # Compute companion matrix
+                              private$..A <- ARMA_companion_matrix(phi, theta)
                               # Store the fitted model
                               private$..model <- ARMA_model
                               # Store the std. errors
                               private$..std.errors <- c(std.errors_intercept, std.errors_ar, std.errors_ma)
+                              # Update fitted variance
+                              private$..sigma2 <- sqrt(ARMA_model$sigma2)
                             },
                             #' @description
                             #' Filter the time-series and compute fitted values and residuals.
@@ -81,6 +88,23 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             #' @param eps Numeric vector, optional realized residuals.
                             next_step = function(x, n.ahead = 1, eps = 0){
                               ARMA_next_step(n.ahead, x, self$A, self$b, self$intercept, eps)
+                            },
+                            #' @description
+                            #' Forecast expected value
+                            #' @param h Numeric scalar, number of steps ahead.
+                            #' @param X0 Numeric vector with length `p + q`, state vector of past values.
+                            expectation = function(h = 1, X0){
+                              if (missing(X0)){
+                                X0 <- rep(0, sum(self$order))
+                              }
+                              ARMA_expectation(h, X0, self$A, self$b, self$intercept)
+                            },
+                            #' @description
+                            #' Forecast variance
+                            #' @param h Numeric scalar, number of steps ahead.
+                            #' @param sigma2 Numeric scalar, std. deviation of the residuals.
+                            variance = function(h = 1, sigma2 = 1){
+                              ARMA_variance(h, self$A, self$b, sigma2)
                             },
                             #' @description
                             #' Update the model's parameters
@@ -126,6 +150,8 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                               # Update the parameters inside the ARMA model
                               names(new_coefs) <- names(private$..model$coef)
                               private$..model$coef <- new_coefs
+                              # Update companion matrix
+                              private$..A <- ARMA_companion_matrix(self$phi, self$theta)
                             },
                             #' @description
                             #' Update the standard errors of the parameters.
@@ -151,6 +177,14 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                               }
                               # Update private std. errors
                               private$..std.errors <- new_std.errors
+                            },
+                            #' @description
+                            #' Update the variance of the residuals.
+                            #' @param sigma2 Numeric scalar, variance of the residuals.
+                            update_sigma2 = function(sigma2){
+                              if (!missing(sigma2)){
+                                private$..sigma2 <- sigma2
+                              }
                             },
                             #' @description
                             #' Print method for `AR_modelR6` class.
@@ -193,6 +227,9 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             ..intercept = 0,
                             ..phi = c(),
                             ..theta = c(),
+                            ..b = c(),
+                            ..A = c(),
+                            ..sigma2 = 1,
                             ..std.errors = NA,
                             include.intercept = FALSE
                           ),
@@ -221,28 +258,28 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             coefficients = function(){
                               c(self$intercept, self$phi, self$theta)
                             },
-                            #' @field mean Numeric scalar, long term expectation.
-                            mean = function(){
-                              self$intercept / (1 - sum(self$phi))
+                            #' @field std.errors Numeric named vector, std.errors of the intercept and ARMA parameters.
+                            std.errors = function(){
+                              private$..std.errors
                             },
-                            #' @field variance Numeric scalar, long term variance. See the function [ARMA_variance()].
-                            variance = function(){
-                              ARMA_variance(1000, self$A, self$b, 1)
+                            #' @field sigma2 Numeric scalar, std.errors of the residuals.
+                            sigma2 = function(){
+                              private$..sigma2
                             },
                             #' @field A Numeric matrix, companion matrix to govern the transition between two time steps.  See the function [ARMA_companion_matrix()].
                             A = function(){
-                              ARMA_companion_matrix(self$phi, self$theta)
+                              private$..A
                             },
                             #' @field b Numeric vector, unitary vector for the residuals. See the function [ARMA_vector_b()].
                             b = function(){
-                              ARMA_vector_b(self$order[1], self$order[2])
+                              private$..b
                             },
                             #' @field tidy Tibble with estimated parameters and relative std. errors.
                             tidy = function(){
                               dplyr::tibble(
                                 term = names(self$coefficients),
                                 estimate = self$coefficients,
-                                std.error = private$..std.errors
+                                std.error = self$std.errors
                               )
                             }
                           ))

@@ -30,9 +30,9 @@ Version 1.0.1
 
 \item{\code{coefficients}}{Numeric named vector, intercept and ARMA parameters.}
 
-\item{\code{mean}}{Numeric scalar, long term expectation.}
+\item{\code{std.errors}}{Numeric named vector, std.errors of the intercept and ARMA parameters.}
 
-\item{\code{variance}}{Numeric scalar, long term variance. See the function \code{\link[=ARMA_variance]{ARMA_variance()}}.}
+\item{\code{sigma2}}{Numeric scalar, std.errors of the residuals.}
 
 \item{\code{A}}{Numeric matrix, companion matrix to govern the transition between two time steps.  See the function \code{\link[=ARMA_companion_matrix]{ARMA_companion_matrix()}}.}
 
@@ -49,8 +49,11 @@ Version 1.0.1
 \item \href{#method-ARMA_modelR6-fit}{\code{ARMA_modelR6$fit()}}
 \item \href{#method-ARMA_modelR6-filter}{\code{ARMA_modelR6$filter()}}
 \item \href{#method-ARMA_modelR6-next_step}{\code{ARMA_modelR6$next_step()}}
+\item \href{#method-ARMA_modelR6-expectation}{\code{ARMA_modelR6$expectation()}}
+\item \href{#method-ARMA_modelR6-variance}{\code{ARMA_modelR6$variance()}}
 \item \href{#method-ARMA_modelR6-update}{\code{ARMA_modelR6$update()}}
 \item \href{#method-ARMA_modelR6-update_std.errors}{\code{ARMA_modelR6$update_std.errors()}}
+\item \href{#method-ARMA_modelR6-update_sigma2}{\code{ARMA_modelR6$update_sigma2()}}
 \item \href{#method-ARMA_modelR6-print}{\code{ARMA_modelR6$print()}}
 \item \href{#method-ARMA_modelR6-clone}{\code{ARMA_modelR6$clone()}}
 }
@@ -132,6 +135,44 @@ Next step function
 }
 }
 \if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-ARMA_modelR6-expectation"></a>}}
+\if{latex}{\out{\hypertarget{method-ARMA_modelR6-expectation}{}}}
+\subsection{Method \code{expectation()}}{
+Forecast expected value
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{ARMA_modelR6$expectation(h = 1, X0)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{h}}{Numeric scalar, number of steps ahead.}
+
+\item{\code{X0}}{Numeric vector with length \code{p + q}, state vector of past values.}
+}
+\if{html}{\out{</div>}}
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-ARMA_modelR6-variance"></a>}}
+\if{latex}{\out{\hypertarget{method-ARMA_modelR6-variance}{}}}
+\subsection{Method \code{variance()}}{
+Forecast variance
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{ARMA_modelR6$variance(h = 1, sigma2 = 1)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{h}}{Numeric scalar, number of steps ahead.}
+
+\item{\code{sigma2}}{Numeric scalar, std. deviation of the residuals.}
+}
+\if{html}{\out{</div>}}
+}
+}
+\if{html}{\out{<hr>}}
 \if{html}{\out{<a id="method-ARMA_modelR6-update"></a>}}
 \if{latex}{\out{\hypertarget{method-ARMA_modelR6-update}{}}}
 \subsection{Method \code{update()}}{
@@ -161,6 +202,23 @@ Update the standard errors of the parameters.
 \if{html}{\out{<div class="arguments">}}
 \describe{
 \item{\code{std.errors}}{Numeric named vector, parameters' standard errors. If missing nothing will be updated.}
+}
+\if{html}{\out{</div>}}
+}
+}
+\if{html}{\out{<hr>}}
+\if{html}{\out{<a id="method-ARMA_modelR6-update_sigma2"></a>}}
+\if{latex}{\out{\hypertarget{method-ARMA_modelR6-update_sigma2}{}}}
+\subsection{Method \code{update_sigma2()}}{
+Update the variance of the residuals.
+\subsection{Usage}{
+\if{html}{\out{<div class="r">}}\preformatted{ARMA_modelR6$update_sigma2(sigma2)}\if{html}{\out{</div>}}
+}
+
+\subsection{Arguments}{
+\if{html}{\out{<div class="arguments">}}
+\describe{
+\item{\code{sigma2}}{Numeric scalar, variance of the residuals.}
 }
 \if{html}{\out{</div>}}
 }

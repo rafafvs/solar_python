@@ -123,11 +123,14 @@ ARMA_expectation <- function(h = 10, X0, A, b, intercept = 0){
   # Build intercept vector
   c_ <- c(intercept, rep(0, pq - 1))
   # Power of A
-  A_pow <- pow_matrix(A, h)
+  A_pow_h <- purrr::map(1:h, ~pow_matrix(A, .x))
   # Identity matrix
   I <- diag(1, nrow = pq)
   # Compute expectation
-  (I - A_pow) %*% solve(I - A) %*% c_  + A_pow %*% X0
+  I_A_c_inv <- solve(I - A) %*% c_
+  pow_sum <- purrr::map_dbl(A_pow_h, ~((I - .x) %*% I_A_c_inv  + .x %*% X0)[[1]])
+  names(pow_sum) <- paste0("t+", 1:h)
+  pow_sum
 }
 
 #' Compute the long-term variance of an ARMA model
@@ -147,13 +150,18 @@ ARMA_expectation <- function(h = 10, X0, A, b, intercept = 0){
 ARMA_variance <- function(h = 1, A, b, sigma2 = 1){
   # Detect AR-order
   bb <- b %*% t(b)
-  pow_sum <- sigma2
+  pow_sum <- list(a = diag(1, nrow(A), nrow(A)))
   A_pow_j <- diag(1, nrow(A))
-  for(i in 1:h){
-    A_pow_j <- A %*% A_pow_j
-    pow_sum <- pow_sum + A_pow_j %*% bb %*% t(A_pow_j)
+  if (h > 1) {
+    for(i in 1:(h-1)){
+      A_pow_j <- A %*% A_pow_j
+      pow_sum[[i+1]] <- pow_sum[[i]] + A_pow_j %*% bb %*% t(A_pow_j)
+    }
   }
-  pow_sum[1,1] * sigma2
+  # Forecasted variances
+  pow_sum <- purrr::map_dbl(pow_sum, ~.x[1,1] * sigma2)
+  names(pow_sum) <- paste0("t+", 1:h)
+  pow_sum
 }
 
 #' Compute the ARMA conditional variance / covariance
@@ -251,60 +259,15 @@ ARMA_filter <- function(x, A, b, intercept = 0) {
   q <- attr(A, "maOrder")
   # Companion matrix
   A <- as.matrix(A); storage.mode(A) <- "double"
-  .Call("ARMA_filter_c",
-        A,
-        as.numeric(b),
-        as.numeric(x),
-        as.integer(p),
-        as.integer(q),
-        as.numeric(intercept))
-}
-
-#' Compute the Jacobian for ARMA coefficients
-#'
-#' @keywords ARMA
-#' @note Version 1.0.0.
-#' @export
-#' @noRd
-ARMA_jacobian_params <- function(x, eps, ARMA){
-  # Length of the time series
-  n <- length(x)
-  # Order AR
-  arOrder <- ARMA$order[1]
-  # Order MA
-  maOrder <- ARMA$order[2]
-  # Starting lag
-  i_start <- max(c(arOrder, maOrder)) + 1
-  # Extract MA parameters
-  theta <- ARMA$theta
-  # Initialization
-  d_mu_d_phi <- matrix(0, n, arOrder)
-  d_mu_d_theta <- matrix(0, n, maOrder)
-  for(t in i_start:n){
-    # Derivative AR parameters
-    if (arOrder != 0){
-      for(i in 1:arOrder){
-        d_mu_d_phi[t, i] <- x[t-i]
-        if (maOrder != 0){
-          for(j in 1:maOrder) {
-            d_mu_d_phi[t, i] <- d_mu_d_phi[t, i] - theta[j] * d_mu_d_phi[t-j, i]
-          }
-        }
-      }
-    }
-    # Derivative MA parameters
-    if (maOrder != 0) {
-      for(i in 1:maOrder){
-        d_mu_d_theta[t, i] <- eps[t-i]
-        for(j in 1:maOrder) {
-          d_mu_d_theta[t, i] <- d_mu_d_theta[t, i] - theta[j] * d_mu_d_theta[t-j, i]
-        }
-      }
-    }
-  }
-  J_phi_theta <- cbind(d_mu_d_phi, d_mu_d_theta)
-  colnames(J_phi_theta) <- names(ARMA$coefficients[-1])
-  return(J_phi_theta)
+  # Fitted values
+  x_hat <- .Call("ARMA_filter_c",
+                 A,
+                 as.numeric(b),
+                 as.numeric(x),
+                 as.integer(p),
+                 as.integer(q),
+                 as.numeric(intercept))
+  return(x_hat)
 }
 
 #' Fast ARMA state-space h-step forecast and weights (C/BLAS)
@@ -376,3 +339,340 @@ AR_variance <- function(phi, sigma2 = 1){
   }
   return(var)
 }
+
+#' From constraint to uncontraint parameters
+#' @note Version 1.0.0.
+#' @noRd
+AR_params_to_zeta <- function(phi){
+  p <- length(phi)
+  if (p == 0) return(numeric(0))
+  # work with a list of coefficient vectors phi^(k)
+  phik <- vector("list", p)
+  phik[[p]] <- phi
+  kappa <- numeric(p)
+  for (k in seq.int(p, 1)) {
+    kappa[k] <- phik[[k]][k]                 # last reflection
+    if (abs(kappa[k]) >= 1) {
+      # tiny clipping for numerical safety
+      kappa[k] <- sign(kappa[k]) * (1 - 1e-12)
+    }
+    if (k > 1) {
+      num <- phik[[k]][1:(k-1)] + kappa[k] * rev(phik[[k]][1:(k-1)])
+      den <- 1 - kappa[k]^2
+      phik[[k-1]] <- num / den              # back out phi^(k-1)
+    }
+  }
+  coefs_star <- atanh(kappa)
+  names(coefs_star) <- names(phi)
+  return(coefs_star)
+}
+
+#' From constraint to uncontraint parameters
+#' @examples
+#' phi <- c(0.3, 0.4, 0.1)
+#' theta <- c(0.1, 0.8)
+#' zeta <- ARMA_params_to_zeta(phi, theta)
+#'
+#' @note Version 1.0.0.
+#' @export
+#' @noRd
+ARMA_params_to_zeta <- function(phi, theta){
+  zeta_phi <- c()
+  # Ensure not missing
+  if (!missing(phi) && phi[1] != 0){
+    zeta_phi <- AR_params_to_zeta(phi)
+    names(zeta_phi) <- paste0("zeta_phi_", 1:length(phi))
+  }
+
+  zeta_theta <- c()
+  # Ensure not missing
+  if (!missing(theta) && theta[1] != 0){
+    zeta_theta <- AR_params_to_zeta(theta)
+    names(zeta_theta) <- paste0("zeta_theta_", 1:length(theta))
+  }
+
+  structure(
+    list(
+      zeta_phi = zeta_phi,
+      zeta_theta = zeta_theta
+    )
+  )
+}
+
+#' From unconstraint to contraint parameters
+#'
+#' @note Version 1.0.0.
+#' @noRd
+AR_params_to_phi <- function(zeta){
+  p <- length(zeta)
+  kappa <- tanh(zeta)
+  names(kappa) <- paste0("kappa_", 1:length(kappa))
+
+  # store phi^(k) along the way
+  phis <- vector("list", p)
+  G <- vector("list", p)  # G[[k]] is k x k matrix of d phi^(k) / d kappa[1:k]
+
+  # k = 1
+  phis[[1]] <- c(kappa[1])
+  G1 <- matrix(0, 1, 1)
+  G1[1,1] <- 1
+  G[[1]] <- G1
+
+  if (p >= 2) {
+    for (k in 2:p) {
+      phi_prev <- phis[[k-1]]
+      phi_new  <- numeric(k)
+
+      # build new phi^(k)
+      for (j in 1:(k-1)) {
+        phi_new[j] <- phi_prev[j] - kappa[k] * phi_prev[k-j]
+      }
+      phi_new[k] <- kappa[k]
+      phis[[k]] <- phi_new
+
+      # build new sensitivity matrix G^{(k)} from G^{(k-1)}
+      G_prev <- G[[k-1]]         # (k-1) x (k-1)
+      Gk <- matrix(0, k, k)      # k x k
+
+      # columns m=1..k-1 propagate; column m=k is special
+      # rows j=1..k-1 use the boxed recurrence; row k is [0 ... 0 | 1]
+      for (m in 1:(k-1)) {
+        for (j in 1:(k-1)) {
+          Gk[j, m] <- G_prev[j, m] - kappa[k] * G_prev[k-j, m]
+        }
+      }
+      # column m=k
+      for (j in 1:(k-1)) {
+        Gk[j, k] <- - phi_prev[k-j]
+      }
+      Gk[k, 1:(k-1)] <- 0
+      Gk[k, k] <- 1
+
+      G[[k]] <- Gk
+    }
+  }
+
+  phi <- phis[[p]]
+  names(phi) <- names(zeta)
+  # From phi to kappa
+  J_phi_kappa <- G[[p]]
+  # From phi to zeta
+  sech2 <- 1 - kappa^2   # elementwise
+  J_phi_zeta <- J_phi_kappa %*% diag(sech2, nrow = p, ncol = p)
+  list(phi = phi,
+       kappa = kappa,
+       J_phi_kappa = J_phi_kappa,
+       J_phi_zeta  = J_phi_zeta)
+}
+
+#' From constraint to uncontraint parameters
+#' @examples
+#' zeta_phi <- c(0.7043836, 0.4652377, 0.1003353)
+#' zeta_theta <- c(0.5493061, 1.0986123)
+#' ARMA_params_to_phi(zeta_phi, zeta_theta)
+#'
+#' @note Version 1.0.0.
+#' @export
+#' @noRd
+ARMA_params_to_phi <- function(zeta_phi, zeta_theta){
+  # AR order
+  p <- 0
+  phi <- c()
+  if (!missing(zeta_phi) && !is.null(zeta_phi)){
+    p <- length(zeta_phi)
+    J_phi <- AR_params_to_phi(zeta_phi)
+    phi <- J_phi$phi
+    names(phi) <- paste0("phi_", 1:p)
+  }
+  # MA order
+  q <- 0
+  theta <- c()
+  if (!missing(zeta_theta) && !is.null(zeta_theta)){
+    q <- length(zeta_theta)
+    J_theta <- AR_params_to_phi(zeta_theta)
+    theta <- J_theta$phi
+    names(theta) <- paste0("theta_", 1:q)
+  }
+  # Jacobian matrix
+  J <- matrix(0, p+q, p+q)
+  if (p > 0){
+    J[1:p, 1:p] <- J_phi$J_phi_zeta
+  }
+  if (q > 0){
+    J[(p+1):(p+q), (p+1):(p+q)] <- J_theta$J_phi_zeta
+  }
+
+  structure(
+    list(
+      phi = phi,
+      theta = theta,
+      J = J
+    )
+  )
+}
+
+#' Log-likelihood with contraint parameters
+ARMA_loss_logLik <- function(params, p = 0, q = 0, y, per_obs = FALSE){
+  # Intercept
+  intercept <- c(0)
+  if (!is.na(params["intercept"])){
+    intercept <- params["intercept"]
+    params[which(names(params) != "intercept")]
+  }
+  # Extract AR parameters
+  zeta_phi <- NULL
+  if (p != 0){
+    zeta_phi <- params[1:p]
+  }
+  # Extract MA parameters
+  zeta_theta <- NULL
+  if (q != 0){
+    zeta_theta <- params[(p+1):(p+q)]
+  }
+  # Converted parameters
+  phi_theta <- ARMA_params_to_phi(zeta_phi, zeta_theta)
+  # Companion matrix and vector b
+  A <- ARMA_companion_matrix(phi_theta$phi, phi_theta$theta)
+  b <- ARMA_vector_b(p, q)
+  # Fitted values
+  y_hat <- ARMA_filter(y, A, b, intercept = intercept)
+  # Fitted sigma
+  idx_excluded <- 1:max(c(p, q))
+  # Errors
+  eps_hat <- (y - y_hat)[-idx_excluded]
+  # Fitted std. deviation
+  sigma_hat <- sqrt(mean(eps_hat^2))
+  # Standardized residuals
+  z_hat <- eps_hat / sigma_hat
+  # Log-likelihoods
+  loglik <- log(dnorm(z_hat) / sigma_hat)
+  # Loss
+  if (per_obs){
+    loglik
+  } else {
+    sum(loglik)
+  }
+}
+
+#' Sum of the errors with contraint parameters
+ARMA_loss_CSS <- function(params, p = 0, q = 0, y){
+  # Intercept
+  intercept <- c(0)
+  if (!is.na(params["intercept"])){
+    intercept <- params["intercept"]
+    params[which(names(params) != "intercept")]
+  }
+  # Extract AR parameters
+  zeta_phi <- NULL
+  if (p != 0){
+    zeta_phi <- params[1:p]
+  }
+  # Extract MA parameters
+  zeta_theta <- NULL
+  if (q != 0){
+    zeta_theta <- params[(p+1):(p+q)]
+  }
+  # Converted parameters
+  phi_theta <- ARMA_params_to_phi(zeta_phi, zeta_theta)
+  # Companion matrix and vector b
+  A <- ARMA_companion_matrix(phi_theta$phi, phi_theta$theta)
+  b <- ARMA_vector_b(p, q)
+  # Fitted values
+  y_hat <- ARMA_filter(y, A, b, intercept = intercept)
+  # Fitted sigma
+  idx_excluded <- 1:max(c(p, q))
+  # Errors
+  eps_hat <- (y - y_hat)[-idx_excluded]
+  # SSE
+  sum(eps_hat^2)
+}
+
+#' Fit with contraint parameters
+ARMA_fit <- function(y, arOrder = 1, maOrder = 0, method = c("CSS", "ML")){
+  # Fit method
+  method <- match.arg(method, choices = c("CSS", "ML"))
+  # Number of observations
+  n <- length(y)
+  # Total order
+  pq <- arOrder + maOrder
+
+  # Initialize unconstraint parameters
+  zeta_phi <- runif(arOrder, -0.1, 0.1)
+  if (arOrder > 0){
+    names(zeta_phi) <- paste0("zeta_phi_", 1:arOrder)
+  }
+  zeta_theta <- runif(maOrder, -0.1, 0.1)
+  if (maOrder > 0){
+    names(zeta_theta) <- paste0("zeta_theta_", 1:maOrder)
+  }
+  # Initial parameters
+  params <- c(zeta_phi, zeta_theta)
+  # Loss function
+  if (method == "CSS"){
+    loss <- function(params) ARMA_loss_CSS(params, p = arOrder, q = maOrder, y = y)
+  } else if (method == "ML"){
+    loss <- function(params) -ARMA_loss_logLik(params, p = arOrder, q = maOrder, y = y, per_obs = FALSE)
+  }
+  # Optimization
+  opt <- optim(params, loss)
+  # Convert parameters
+  opt_par <- opt$par
+  # Initialize unconstraint parameters
+  zeta_phi <- c()
+  if (arOrder > 0){
+    zeta_phi <- opt_par[1:arOrder]
+    names(zeta_phi) <- paste0("zeta_phi_", 1:arOrder)
+  }
+  zeta_theta <- c()
+  if (maOrder > 0){
+    zeta_theta <- opt_par[(arOrder+1):pq]
+    names(zeta_theta) <- paste0("zeta_theta_", 1:maOrder)
+  }
+  # QMLE parameters
+  theta_star_qmle <- c(zeta_phi, zeta_theta)
+  # Constraint parameters
+  res <- ARMA_params_to_phi(zeta_phi, zeta_theta)
+  theta_qmle <- c(res$phi, res$theta)
+  # Numerical Hessian matrix at QMLE
+  H <- numDeriv::hessian(func = ARMA_loss_logLik, x = theta_star_qmle,
+                         p = arOrder, q = maOrder, y = y, per_obs = FALSE)
+  # Numerical Score at QMLE
+  S <- numDeriv::jacobian(func = ARMA_loss_logLik, x = theta_star_qmle,
+                         p = arOrder, q = maOrder, y = y, per_obs = TRUE)
+  # Cross products of the score
+  B <- matrix(0, pq, pq)
+  for(i in 1:nrow(S)) {
+    B <- B + S[i,] %*% t(S[i,])
+  }
+  # Var-cov matrix (unbounded)
+  V_star <- solve(-H)
+  std.errors_zeta <- sqrt(diag(V_star))
+  names(std.errors_zeta) <- names(theta_star_qmle)
+  # Var-cov matrix (constraint)
+  V_orig <- res$J %*% V_star %*% t(res$J)
+  std.errors_phi <- sqrt(diag(V_orig))
+  names(std.errors_phi) <- names(theta_qmle)
+
+  # Sandwitch var-cov matrix (unbounded)
+  V_rob_star <- V_star %*% B %*% V_star
+  std.errors_rob_zeta <- sqrt(diag(V_rob_star))
+  names(std.errors_rob_zeta) <- names(theta_star_qmle)
+  # Sandwitch var-cov matrix (constraint)
+  V_rob_orig <- res$J %*% V_rob_star %*% t(res$J)
+  std.errors_rob_phi <- sqrt(diag(V_rob_orig))
+  names(std.errors_rob_phi) <- names(theta_qmle)
+  # ************************************************
+  # Store loss
+  res$loss <- opt$value
+  names(res$loss) <- method
+  # Store hessian
+  res$H <- H
+  # Store Vcov matrices
+  res$vcov <- list(V_star = V_star, V_orig = V_orig,V_rob_star = V_rob_star, V_rob_orig = V_rob_orig)
+  res$vcov_rob <- list(V_star = V_rob_star, V_orig = V_rob_orig)
+  # Std.errors
+  res$std.errors <- list(zeta = std.errors_zeta, phi = std.errors_phi)
+  res$std.errors_rob <- list(zeta = std.errors_rob_zeta, phi = std.errors_rob_phi)
+  res
+}
+
