@@ -334,11 +334,11 @@ solarScenario_filter <- function(simSpec){
       df_sim$Yt_tilde[i] <- df_sim$Yt_tilde_hat[i] + df_sim$eps[i]
       # Simulated transformed variable (Yt)
       df_sim$Yt[i] <- df_sim$Yt_bar[i] + df_sim$Yt_tilde[i] + df_sim$Yt_tilde_uncond[i]
-      # Simulated cloudiness ratio (Xt)
-      df_sim$Xt[i] <- simSpec$transform$iY(df_sim$Yt[i])
-      # Simulated solar radiation (GHI)
-      df_sim[[simSpec$target]][i] <- simSpec$transform$GHI(df_sim$Xt[i], df_sim$Ct[i])
     }
+    # Simulated cloudiness ratio (Xt)
+    df_sim$Xt <- simSpec$transform$iX_prime(simSpec$transform$iY(df_sim$Yt))
+    # Simulated solar radiation (GHI)
+    df_sim[[simSpec$target]] <- simSpec$transform$iX(df_sim$Xt, df_sim$Ct)
     # Remove redundant variables
     df_sim <- dplyr::select(df_sim, -mu1, -mu2, -sd1, -sd2, -p1, -Ct, -Yt_bar, -sigma_bar, -Yt_tilde_hat, -Yt_tilde_uncond, -sigma_uncond)
     # Remove initial values

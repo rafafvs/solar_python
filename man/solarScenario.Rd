@@ -42,7 +42,7 @@ Version 1.0.0.
 \examples{
 model <- solarModel$new(spec)
 model$fit()
-scen <- solarScenario(model, "2005-01-10", "2025-01-10", theta = 0.1, nsim = 5, by = "1 year")
+scen <- solarScenario(model, "2005-01-10", "2020-01-01", theta = 0, nsim = 4, by = "1 year")
 # Plot
 solarScenario_plot(scen, nsim = 3)
 # Solar Option

@@ -122,8 +122,6 @@ model$fit()
 \item \href{#method-solarModel-Moments}{\code{solarModel$Moments()}}
 \item \href{#method-solarModel-VaR}{\code{solarModel$VaR()}}
 \item \href{#method-solarModel-logLik}{\code{solarModel$logLik()}}
-\item \href{#method-solarModel-R_to_Y}{\code{solarModel$R_to_Y()}}
-\item \href{#method-solarModel-Y_to_R}{\code{solarModel$Y_to_R()}}
 \item \href{#method-solarModel-print}{\code{solarModel$print()}}
 \item \href{#method-solarModel-clone}{\code{solarModel$clone()}}
 }
@@ -419,50 +417,6 @@ Compute the log-likelihood of the model and update the slot \verb{$loglik}.
 \item{\code{quasi}}{Logical, when \code{TRUE} is computed the pseudo-likelihood with Gaussian link.}
 }
 \if{html}{\out{</div>}}
-}
-}
-\if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-solarModel-R_to_Y"></a>}}
-\if{latex}{\out{\hypertarget{method-solarModel-R_to_Y}{}}}
-\subsection{Method \code{R_to_Y()}}{
-Convert solar radiation Rt into the transformed variable Yt for a given day of the year.
-\subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{solarModel$R_to_Y(Rt, t_now)}\if{html}{\out{</div>}}
-}
-
-\subsection{Arguments}{
-\if{html}{\out{<div class="arguments">}}
-\describe{
-\item{\code{Rt}}{Numeric, solar radiation.}
-
-\item{\code{t_now}}{Character, today date.}
-}
-\if{html}{\out{</div>}}
-}
-\subsection{Returns}{
-Transformed variable on date t_now.
-}
-}
-\if{html}{\out{<hr>}}
-\if{html}{\out{<a id="method-solarModel-Y_to_R"></a>}}
-\if{latex}{\out{\hypertarget{method-solarModel-Y_to_R}{}}}
-\subsection{Method \code{Y_to_R()}}{
-Convert the transformed variable Yt into solar radiation Rt for a given day of the year.
-\subsection{Usage}{
-\if{html}{\out{<div class="r">}}\preformatted{solarModel$Y_to_R(Yt, t_now)}\if{html}{\out{</div>}}
-}
-
-\subsection{Arguments}{
-\if{html}{\out{<div class="arguments">}}
-\describe{
-\item{\code{Yt}}{Numeric, transformed variable.}
-
-\item{\code{t_now}}{Character, today date.}
-}
-\if{html}{\out{</div>}}
-}
-\subsection{Returns}{
-Solar radiation Rt on date t_now.
 }
 }
 \if{html}{\out{<hr>}}

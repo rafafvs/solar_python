@@ -547,7 +547,7 @@ solarOption_covariance <- function(t_now, mom_t, mom_T, model){
   pdf_Yt <- function(x) mom_T$p1 * mom_t$p1 * pdf_11(x) + mom_T$p1 * (1-mom_t$p1) * pdf_01(x) + (1-mom_T$p1) * mom_t$p1 * pdf_10(x) + (1-mom_T$p1) * (1-mom_t$p1) * pdf_00(x)
   #pdf_Rt <- function(x) dmvsolarGHI(x, c(mom_T$Ct, mom_t$Ct), c(mom_T$alpha, mom_t$alpha), c(mom_T$beta, mom_t$beta), pdf_Yt)
 
-  payoff <- function(x, K, Ct) (K - transform$GHI_y(x, Ct))*ifelse(transform$GHI_y(x, Ct) > K, 0, 1)
+  payoff <- function(x, K, Ct) (K - transform$iRY(x, Ct))*ifelse(transform$iRY(x, Ct) > K, 0, 1)
   mom_t$GHI_bar <- filter(model$data, date == mom_t$date)$GHI_bar
   mom_T$GHI_bar <- filter(model$data, date == mom_T$date)$GHI_bar
 

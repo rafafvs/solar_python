@@ -171,11 +171,12 @@ spatialModel_simulate_filter <- function(model, from = "2010-01-01", to = "2010-
     df_sim$Yt_tilde[i] <- df_sim$Yt_tilde_hat[i] + df_sim$eps[i]
     # Simulated Yt
     df_sim$Yt[i] <- df_sim$Yt_bar[i] + df_sim$Yt_tilde[i] + df_sim$Yt_tilde_uncond[i]
-    # Simulated Xt
-    df_sim$Xt[i] <- model$transform$iY(df_sim$Yt[i])
-    # Simulated GHI
-    df_sim[[model$target]][i] <- model$transform$GHI(df_sim$Xt[i], df_sim$Ct[i])
   }
+  # Simulated cloudiness ratio (Xt)
+  df_sim$Xt <- model$transform$iX_prime(model$transform$iY(df_sim$Yt))
+  # Simulated solar radiation (GHI)
+  df_sim[[model$target]] <- model$transform$iX(df_sim$Xt, df_sim$Ct)
+
   # Remove redundant variables
   df_sim <- dplyr::select(df_sim, -mu_up, -mu_dw, -sd_up, -sd_dw, -p_up, -Ct, -Yt_bar, -sigma_bar, -sigma_m, -Yt_tilde_hat, -Yt_tilde_uncond, -z)
   # Remove initial values

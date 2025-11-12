@@ -139,23 +139,24 @@ solarModel <- R6::R6Class("solarModel",
                               target <- self$spec$target
                               control <- self$spec
                               data <- self$data
+                              transform <- self$transform
                               # **************************************************** #
                               if (control$stochastic_clearsky) {
                                 # Risk driver
-                                data$Xt <- self$transform$iGHI(data[[target]], data$clearsky)
+                                data$Xt <- transform$X(data[[target]], data$clearsky)
                                 # Detect and impute outliers
                                 outliers <- clearsky_outliers(data[["GHI"]], data$clearsky, date = data$date, quiet = control$quiet)
                                 # Update GHI
                                 data[["GHI"]] <- outliers$x
                                 # Risk driver
-                                data[["Xt"]] <- self$transform$iGHI(data[["GHI"]], data$clearsky)
+                                data[["Xt"]] <- transform$X(data[["GHI"]], data$clearsky)
                               } else {
                                 # Detect and impute outliers
                                 outliers <- clearsky_outliers(data[["GHI"]], data$Ct, date = data$date, quiet = control$quiet)
                                 # Update GHI
                                 data[["GHI"]] <- outliers$x
                                 # Add computed risk driver in data
-                                data[["Xt"]] <- self$transform$iGHI(data[["GHI"]], data$Ct)
+                                data[["Xt"]] <- transform$X(data[["GHI"]], data$Ct)
                               }
                               # **************************************************** #
                               # Add computed risk driver in data
@@ -191,7 +192,7 @@ solarModel <- R6::R6Class("solarModel",
                               outliers$date <- data$date[outliers$index]
                               # **************************************************** #
                               # Compute the transformed variable
-                              data$Yt <- self$transform$Y(data[["Xt"]])
+                              data$Yt <- self$transform$Y(self$transform$X_prime(data[["Xt"]]))
                               # Add Yt to private data
                               private$..data[["Yt"]] <- data$Yt
                               # Store the updated outliers
@@ -213,9 +214,6 @@ solarModel <- R6::R6Class("solarModel",
                               # Initialize the seasonal model for Yt
                               seasonal_model_Yt <- seasonalModel$new(order = control$order, period = control$period)
                               seasonal_model_Yt$fit(as.formula(formula_Yt), data = data_train)
-                              # Optimization
-                              #opt <- seasonalGHI_optimizer(seasonal_model_Yt, self$transform, data_train)
-                              #seasonal_model_Yt$update(opt$params)
                               # Compute Yt_bar
                               data$Yt_bar <- seasonal_model_Yt$predict(newdata = data)
                               # Compute Yt_tilde
@@ -246,7 +244,7 @@ solarModel <- R6::R6Class("solarModel",
                               # Add Yt_bar to data
                               private$..data[["Yt_bar"]] <- self$seasonal_model_Yt$predict(newdata = data)
                               # Add GHI_bar to data
-                              private$..data[[paste0(target, "_bar")]] <- self$transform$GHI_y(self$data$Yt_bar, self$data$Ct)
+                              private$..data[[paste0(target, "_bar")]] <- self$transform$iRY(self$data$Yt_bar, self$data$Ct)
                             },
                             #' @description
                             #' Correct the deseasonalized series (`Yt_tilde`) by subtracting its monthly mean (`Yt_tilde_uncond`).
@@ -580,7 +578,7 @@ solarModel <- R6::R6Class("solarModel",
                               # Update seasonal mean of Yt
                               private$..data[["Yt_bar"]] <- self$seasonal_model_Yt$predict(newdata = private$..data)
                               # Update seasonal mean of target variable
-                              private$..data[[paste0(target, "_bar")]] <- self$transform$GHI_y(private$..data[["Yt_bar"]], self$data[["Ct"]])
+                              private$..data[[paste0(target, "_bar")]] <- self$transform$iRY(private$..data[["Yt_bar"]], self$data[["Ct"]])
                               # Update Yt_tilde
                               private$..data[["Yt_tilde"]] <- private$..data[["Yt"]] - private$..data$Yt_bar
                               # Fit the corrective mean
@@ -707,27 +705,6 @@ solarModel <- R6::R6Class("solarModel",
                               }
                               # **************************************************** #
                               return(moments$loglik)
-                            },
-                            #' @description
-                            #' Convert solar radiation Rt into the transformed variable Yt for a given day of the year.
-                            #' @param Rt Numeric, solar radiation.
-                            #' @param t_now Character, today date.
-                            #' @return Transformed variable on date t_now.
-                            R_to_Y = function(Rt, t_now){
-                              n <- number_of_day(t_now)
-                              # Cloudiness index
-                              Xt <- self$transform$iGHI(Rt, self$seasonal_model_Ct$predict(n))
-                              # Transformed variable
-                              self$transform$Y(Xt)
-                            },
-                            #' @description
-                            #' Convert the transformed variable Yt into solar radiation Rt for a given day of the year.
-                            #' @param Yt Numeric, transformed variable.
-                            #' @param t_now Character, today date.
-                            #' @return Solar radiation Rt on date t_now.
-                            Y_to_R = function(Yt, t_now){
-                              n <- number_of_day(t_now)
-                              self$transform$GHI_y(Yt, self$seasonal_model_Ct$predict(n))
                             },
                             #' @description
                             #' Print method for `solarModel` class.

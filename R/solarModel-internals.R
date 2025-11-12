@@ -78,9 +78,9 @@ solarModel_covariance <- function(t_now, mom_t, mom_T, GARCH, NM_model, theta = 
   # Store the pdfs
   mom_T$pdf <- list(pdf = list(Yt = pdf_Yt, YT = pdf_YT, joint = joint_pdf_YtT))
   # Compute covariance
-  #mom_T$e_RT <- integrate(function(x) transform$GHI_y(x, mom_T$Ct)*pdf_YT(x), lower = -Inf, upper = Inf)$value
-  #mom_T$e_Rt <- integrate(function(x) transform$GHI_y(x, mom_t$Ct)*pdf_Yt(x), lower = -Inf, upper = Inf)$value
-  #mom_T$e_Rt_RT <- cubature::hcubature(function(x) transform$GHI_y(x[1], mom_T$Ct)*transform$GHI_y(x[2], mom_t$Ct)*joint_pdf_YtT(x),
+  #mom_T$e_RT <- integrate(function(x) transform$iRY(x, mom_T$Ct)*pdf_YT(x), lower = -Inf, upper = Inf)$value
+  #mom_T$e_Rt <- integrate(function(x) transform$iRY(x, mom_t$Ct)*pdf_Yt(x), lower = -Inf, upper = Inf)$value
+  #mom_T$e_Rt_RT <- cubature::hcubature(function(x) transform$iRY(x[1], mom_T$Ct)*transform$iRY(x[2], mom_t$Ct)*joint_pdf_YtT(x),
   #                   tol = tol, lowerLimit = c(-Inf, -Inf), upperLimit = c(Inf, Inf))$integral
   mom_T$t_cond <- mom_t$date
   # Covariance
@@ -138,7 +138,7 @@ solarModel_predict <- function(model, moments, lambda = 0, ci = 0.01){
     cdf_Yt_dw <- psugeno(cdf_Yt_dw_, lambda)
   }
   # Expected value of Rt^q
-  e_Rt_q <- function(q = 1, pdf_Yt) integrate(function(x) model$transform$GHI_y(x, df_n$Ct)^q * pdf_Yt(x), lower = -Inf, upper = Inf)$value
+  e_Rt_q <- function(q = 1, pdf_Yt) integrate(function(x) model$transform$iRY(x, df_n$Ct)^q * pdf_Yt(x), lower = -Inf, upper = Inf)$value
 
   # Expected values
   # Mixture
