@@ -219,7 +219,7 @@ List with specification's parameters of the seasonal mean \eqn{\bar{Y}_t} for \e
   period = 365,
   include.trend = FALSE,
   include.intercept = TRUE,
-  monthly.mean = TRUE
+  monthly.mean = FALSE
 )}\if{html}{\out{</div>}}
 }
 
@@ -275,8 +275,8 @@ List with specification's parameters of the seasonal variance \eqn{\bar{\sigma}_
   order = 1,
   period = 365,
   include.trend = FALSE,
-  correction = TRUE,
-  monthly.mean = TRUE
+  correction = FALSE,
+  monthly.mean = FALSE
 )}\if{html}{\out{</div>}}
 }
 
@@ -332,7 +332,7 @@ List with specification's parameters of the Gaussian mixture model for GARCH res
 \subsection{Usage}{
 \if{html}{\out{<div class="r">}}\preformatted{solarModel_spec$set_mixture.model(
   abstol = 1e-20,
-  match.expectation = TRUE,
+  match.expectation = FALSE,
   match.variance = FALSE,
   match.empiric = FALSE,
   method = "mclust",

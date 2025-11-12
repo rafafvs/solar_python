@@ -17,7 +17,7 @@ st <- solarTransform$new()
 }
 \keyword{solarModel}
 \section{Super class}{
-\code{solarr::boundTransform} -> \code{solarTransform}
+\code{\link[solarr:boundTransform]{solarr::boundTransform}} -> \code{solarTransform}
 }
 \section{Public fields}{
 \if{html}{\out{<div class="r6-fields">}}

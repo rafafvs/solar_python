@@ -142,7 +142,7 @@ solarModel_spec <- R6::R6Class("solarModel_spec",
                                  #' @param include.intercept Logical. When `TRUE` the intercept \deqn{a_0} will be included in the seasonal model, otherwise will be excluded. The default is `TRUE`.
                                  #' @param monthly.mean Logical. When `TRUE` a vector of 12 monthly means will be computed on the deseasonalized series \deqn{\tilde{Y}_t = Y_t - \bar{Y}_t}
                                  #'  and it is subtracted to ensure that the time series is centered around zero for all the months. The dafault if `TRUE`.
-                                 set_seasonal.mean = function(order = 1, period = 365, include.trend = FALSE, include.intercept = TRUE, monthly.mean = TRUE){
+                                 set_seasonal.mean = function(order = 1, period = 365, include.trend = FALSE, include.intercept = TRUE, monthly.mean = FALSE){
                                    private$..seasonal.mean = list(order = order, period = period,
                                                                   include.trend = include.trend, include.intercept = include.intercept,
                                                                   monthly.mean = monthly.mean)
@@ -165,7 +165,7 @@ solarModel_spec <- R6::R6Class("solarModel_spec",
                                  #' @param monthly.mean Logical. When `TRUE` a vector of 12 monthly std. deviations will be computed
                                  #'  on the standardized residuals  \deqn{\tilde{\varepsilon}_t} and used to standardize the time series
                                  #'  such that it has unitary variance for all the months. The default if `TRUE`.
-                                 set_seasonal.variance = function(order = 1, period = 365, include.trend = FALSE, correction = TRUE, monthly.mean = TRUE){
+                                 set_seasonal.variance = function(order = 1, period = 365, include.trend = FALSE, correction = FALSE, monthly.mean = FALSE){
                                    private$..seasonal.variance = list(order = order, period = period, correction = correction,
                                                                       include.trend = include.trend, monthly.mean = monthly.mean)
                                  },
@@ -195,7 +195,7 @@ solarModel_spec <- R6::R6Class("solarModel_spec",
                                  #' @param method Character, package used to fit the parameters. Can be `mclust` or `mixtools`.
                                  #' @param maxit Integer. Maximum number of iterations for EM-algorithm. The default is `5000`.
                                  #' @param maxrestarts Integer. Maximum number of restarts when EM-algorithm does not converge. The default is `500`.
-                                 set_mixture.model = function(abstol = 1e-20, match.expectation = TRUE, match.variance = FALSE,
+                                 set_mixture.model = function(abstol = 1e-20, match.expectation = FALSE, match.variance = FALSE,
                                                               match.empiric = FALSE, method = "mclust", maxit = 5000, maxrestarts = 500){
                                    method <- match.arg(method, choices = c("mclust", "mixtools"))
                                    private$..mixture.model = list(abstol = abstol,

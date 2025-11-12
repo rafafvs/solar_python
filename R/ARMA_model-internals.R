@@ -478,7 +478,7 @@ ARMA_params_to_phi <- function(zeta_phi, zeta_theta){
   # AR order
   p <- 0
   phi <- c()
-  if (!missing(zeta_phi) && !is.null(zeta_phi)){
+  if (!missing(zeta_phi) && !purrr::is_empty(zeta_phi)){
     p <- length(zeta_phi)
     J_phi <- AR_params_to_phi(zeta_phi)
     phi <- J_phi$phi
@@ -487,7 +487,7 @@ ARMA_params_to_phi <- function(zeta_phi, zeta_theta){
   # MA order
   q <- 0
   theta <- c()
-  if (!missing(zeta_theta) && !is.null(zeta_theta)){
+  if (!missing(zeta_theta) && !purrr::is_empty(zeta_theta)){
     q <- length(zeta_theta)
     J_theta <- AR_params_to_phi(zeta_theta)
     theta <- J_theta$phi

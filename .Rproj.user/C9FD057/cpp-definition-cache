@@ -55,7 +55,7 @@
     },
     {
         "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/init.c",
-        "file_last_write": 1762909717.0,
+        "file_last_write": 1762984975.0,
         "definitions": [
             {
                 "usr": "c:@F@R_init_yourpkg",
@@ -63,7 +63,7 @@
                 "parent_name": "",
                 "name": "R_init_yourpkg(DllInfo *)",
                 "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/init.c",
-                "line": 26,
+                "line": 29,
                 "column": 6,
                 "hidden": false
             }
@@ -199,6 +199,33 @@
                 "name": "sGARCH_forecast_sigma4_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
                 "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_sigma4_c.c",
                 "line": 8,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/solarModel_quasi_loglik_c.c",
+        "file_last_write": 1762982243.0,
+        "definitions": [
+            {
+                "usr": "c:solarModel_quasi_loglik_c.c@F@imax4",
+                "kind": 6,
+                "parent_name": "",
+                "name": "imax4(int, int, int, int)",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/solarModel_quasi_loglik_c.c",
+                "line": 5,
+                "column": 19,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@solarModel_quasi_loglik_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "solarModel_quasi_loglik_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/solarModel_quasi_loglik_c.c",
+                "line": 12,
                 "column": 6,
                 "hidden": false
             }

@@ -11,6 +11,8 @@ extern SEXP sGARCH_filter_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP);
 extern SEXP sGARCH_forecast_sigma4_c(SEXP A_, SEXP b_, SEXP d_, SEXP e1_, SEXP S0_, SEXP E_S0_, SEXP H_, SEXP m2_, SEXP m4_);
 extern SEXP sGARCH_forecast_sigma2_c(SEXP A_, SEXP b_, SEXP d_, SEXP e1_, SEXP S0_, SEXP H_, SEXP m2_);
 extern SEXP sGARCH_forecast_covariance_c(SEXP A_, SEXP b_, SEXP d_, SEXP e1_, SEXP E_S0_, SEXP E2_S0_, SEXP H_, SEXP m2_);
+extern SEXP solarModel_quasi_loglik_c(SEXP YtS, SEXP wS, SEXP tS, SEXP aS, SEXP phiS, SEXP thetaS, SEXP bS, SEXP omegaS, SEXP alphaS, SEXP betaS, SEXP negS, SEXP perObsS);
+
 
 static const R_CallMethodDef CallEntries[] = {
   {"pow_matrix_c", (DL_FUNC) &pow_matrix_c, 2},
@@ -20,6 +22,7 @@ static const R_CallMethodDef CallEntries[] = {
   {"sGARCH_forecast_sigma2_c", (DL_FUNC) &sGARCH_forecast_sigma2_c, 6},
   {"sGARCH_forecast_sigma4_c", (DL_FUNC) &sGARCH_forecast_sigma4_c, 6},
   {"sGARCH_forecast_covariance_c", (DL_FUNC) &sGARCH_forecast_covariance_c, 6},
+  {"solarModel_quasi_loglik_c", (DL_FUNC) &solarModel_quasi_loglik_c, 6},
   {NULL, NULL, 0}
 };
 

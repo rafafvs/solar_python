@@ -6,6 +6,19 @@
 \usage{
 sGARCH_params_to_zeta_jacobian(zeta, p, q, mode = "unitOmega", eps = 0)
 }
+\arguments{
+\item{zeta}{Numeric vector of unconstrained parameters: \code{eta0} (mass),
+\code{kappa_1..kappa_{p+q}} (softmax logits), and optionally \code{xi} or \code{psi}
+depending on \code{mode}.}
+
+\item{p}{Integer, ARCH order.}
+
+\item{q}{Integer, GARCH order.}
+
+\item{mode}{Character, one of \code{"unitOmega"}, \code{"targetSigma2"}, \code{"freeOmega"}.}
+
+\item{eps}{Numeric buffer in [0,1), enforces \eqn{\tau \le 1-\varepsilon}.}
+}
 \value{
 A numeric matrix of size \code{(1+p+q) x (1+(p+q-1)+extra)},
 where \code{extra} is 0, 1 for \code{xi}, or 1 for \code{psi} depending on \code{mode}.

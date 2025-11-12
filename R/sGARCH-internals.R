@@ -58,7 +58,6 @@ sGARCH_filter <- function(x, omega, alpha, beta, eps0 = NULL, sigma20 = NULL) {
 
 #' Next-step value of an ARMA process
 #'
-#' @inheritParams ARMA_expectation
 #' @param eps Numeric, vector of new residuals.
 #' @examples
 #' # Companion matrix and vector b
@@ -275,7 +274,7 @@ sGARCH_params_to_zeta <- function(phi, p, q, mode = "unitOmega", eps = 0) {
 #' (last \code{kappa} fixed to 0). Rows are ordered as
 #' \code{(omega, alpha_1..alpha_p, beta_1..beta_q)}.
 #'
-#' @inheritParams GARCH_params_to_phi
+#' @inheritParams sGARCH_params_to_phi
 #'
 #' @return A numeric matrix of size \code{(1+p+q) x (1+(p+q-1)+extra)},
 #'   where \code{extra} is 0, 1 for \code{xi}, or 1 for \code{psi} depending on \code{mode}.
@@ -378,7 +377,7 @@ sGARCH_params_to_zeta_jacobian <- function(zeta, p, q, mode = "unitOmega", eps =
 #' @param garchOrder Integer \eqn{q}.
 #' @param per_obs Logical; if \code{TRUE}, returns the log-likelihood by observation,
 #'   else returns the scalar sum.
-#' @inheritParams GARCH_params_to_phi
+#' @inheritParams sGARCH_params_to_phi
 #'
 #' @return Numeric vector (if \code{per_obs=TRUE}) or numeric scalar (sum log-likelihood).
 #'
@@ -410,7 +409,7 @@ sGARCH_loglik <- function(y, weights, omega, alpha, beta, eps0 = NULL, sigma20 =
 #' @param x Numeric vector to fit.
 #' @param archOrder Integer \eqn{p}.
 #' @param garchOrder Integer \eqn{q}.
-#' @inheritParams GARCH_params_to_phi
+#' @inheritParams sGARCH_params_to_phi
 #'
 #' @return A list with elements:
 #' \describe{
@@ -706,7 +705,6 @@ sGARCH_forecast_sigma4 <- function(h = 1, A, b, d, e1, S0, E_S0, e_u2 = 1, e_u4 
   names(res$E2_S0) <- paste0("t+", 1:h)
   dplyr::tibble(h = 1:h, e_sigma4 = res$e_sigma4, E2_S0 = res$E2_S0)
 }
-
 
 #' Forecast GARCH
 #' @keywords GARCH

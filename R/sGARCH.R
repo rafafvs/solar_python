@@ -9,7 +9,9 @@ sGARCH <- R6::R6Class("sGARCH",
                              public = list(
                                #' @description
                                #' Initialize a standard GARCH model
-                               #' @param sigma20 Numeric scalar. Target unconditional variance.
+                               #' @param archOrder Integer scalar, ARCH order.
+                               #' @param garchOrder Integer scalar, GARCH order.
+                               #' @param mode Character, one of \code{"unitOmega"}, \code{"targetSigma2"}, \code{"freeOmega"}.
                                initialize = function(archOrder = 1, garchOrder = 1, mode = "unitOmega"){
                                  # ARCH order
                                  private[["..archOrder"]] <- archOrder
@@ -52,8 +54,8 @@ sGARCH <- R6::R6Class("sGARCH",
                                #' @description
                                #' Filter method from `rugarch` package to compute GARCH variance, residuals and log-likelihoods.
                                #' @param x Numeric, vector. Time series to be filtered.
-                               #' @param coefficients Numeric, named vector. Model's coefficients. When missing will be used the fitted parameters.
-                               #' @param ... Other arguments passed to `ugarchfilter` function.
+                               #' @param eps0 Optional numeric initial epsilons to prepend (length p+q).
+                               #' @param sigma20 Optional numeric initial variances to prepend (length p+q).
                                filter = function(x, eps0 = NULL, sigma20 = NULL){
                                  sGARCH_filter(x, self$omega, self$alpha, self$beta, eps0, sigma20)
                                },
@@ -81,9 +83,7 @@ sGARCH <- R6::R6Class("sGARCH",
                                    }
                                  }
                                  # Update intercept
-                                 if (private$include.intercept){
-                                   private$..omega <- new_coefs["omega"]
-                                 }
+                                 private$..omega <- new_coefs["omega"]
                                  # Update AR parameters
                                  if (self$archOrder > 0) {
                                    private$..alpha <- new_coefs[stringr::str_detect(names_old, "alpha")]
@@ -102,7 +102,7 @@ sGARCH <- R6::R6Class("sGARCH",
                                #' Numerical computation of the std. errors of the parameters.
                                #' @param std.errors Numeric std. errors.
                                update_std.errors = function(std.errors){
-                                 if (missing(std.errors)) {
+                                 if (missing(std.errors) || purrr::is_empty(std.errors)) {
                                    return(invisible(NULL))
                                  }
                                  # Extract old coefficients
@@ -125,8 +125,8 @@ sGARCH <- R6::R6Class("sGARCH",
                                },
                                #' @description
                                #' Next step GARCH std. deviation forecast
-                               #' @param eps0 Numeric, vector. Past residuals.
-                               #' @param sigma20 Numeric, vector. Past GARCH variance.
+                               #' @param eps0 Numeric initial epsilons to prepend (length p+q).
+                               #' @param sigma20 Numeric initial variances to prepend (length p+q).
                                next_step = function(eps0, sigma20){
                                  sGARCH_next_step(self$omega, self$alpha, self$beta, eps0, sigma20)
                                },
@@ -217,11 +217,11 @@ sGARCH <- R6::R6Class("sGARCH",
                                A = function(){
                                  private$..A
                                },
-                               #' @field beta Numeric vector.
+                               #' @field b Numeric vector.
                                b = function(){
                                  private$..b
                                },
-                               #' @field coefficients Numeric vector
+                               #' @field d Numeric vector
                                d = function(){
                                  private$..d
                                },

@@ -159,7 +159,7 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             #' Update the standard errors of the parameters.
                             #' @param std.errors Numeric named vector, parameters' standard errors. If missing nothing will be updated.
                             update_std.errors = function(std.errors){
-                              if (missing(std.errors)) {
+                              if (missing(std.errors) || purrr::is_empty(std.errors)) {
                                 return(invisible(NULL))
                               }
                               # Extract old coefficients

@@ -22,8 +22,6 @@ Version 1.0.0.
 # Model specification
 spec <- solarModel_spec$new()
 spec$set_mean.model(arOrder = 1, maOrder = 1)
-spec$set_seasonal.mean(monthly.mean = FALSE)
-spec$set_seasonal.variance(monthly.mean = FALSE)
 spec$specification("Bologna")
 spec
 # Model fit

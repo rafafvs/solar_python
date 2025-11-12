@@ -17,6 +17,8 @@ sGARCH_fit(
 
 \item{garchOrder}{Integer \eqn{q}.}
 
+\item{mode}{Character, one of \code{"unitOmega"}, \code{"targetSigma2"}, \code{"freeOmega"}.}
+
 \item{x}{Numeric vector to fit.}
 }
 \value{

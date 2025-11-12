@@ -31,9 +31,9 @@ Version 1.0.0
 
 \item{\code{A}}{Numeric matrix, companion matrix.}
 
-\item{\code{beta}}{Numeric vector.}
+\item{\code{b}}{Numeric vector.}
 
-\item{\code{coefficients}}{Numeric vector}
+\item{\code{d}}{Numeric vector}
 
 \item{\code{std.errors}}{Numeric vector, standard errors of the model's coefficients.}
 
@@ -70,7 +70,11 @@ Initialize a standard GARCH model
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{sigma20}}{Numeric scalar. Target unconditional variance.}
+\item{\code{archOrder}}{Integer scalar, ARCH order.}
+
+\item{\code{garchOrder}}{Integer scalar, GARCH order.}
+
+\item{\code{mode}}{Character, one of \code{"unitOmega"}, \code{"targetSigma2"}, \code{"freeOmega"}.}
 }
 \if{html}{\out{</div>}}
 }
@@ -108,9 +112,9 @@ Filter method from \code{rugarch} package to compute GARCH variance, residuals a
 \describe{
 \item{\code{x}}{Numeric, vector. Time series to be filtered.}
 
-\item{\code{coefficients}}{Numeric, named vector. Model's coefficients. When missing will be used the fitted parameters.}
+\item{\code{eps0}}{Optional numeric initial epsilons to prepend (length p+q).}
 
-\item{\code{...}}{Other arguments passed to \code{ugarchfilter} function.}
+\item{\code{sigma20}}{Optional numeric initial variances to prepend (length p+q).}
 }
 \if{html}{\out{</div>}}
 }
@@ -161,9 +165,9 @@ Next step GARCH std. deviation forecast
 \subsection{Arguments}{
 \if{html}{\out{<div class="arguments">}}
 \describe{
-\item{\code{eps0}}{Numeric, vector. Past residuals.}
+\item{\code{eps0}}{Numeric initial epsilons to prepend (length p+q).}
 
-\item{\code{sigma20}}{Numeric, vector. Past GARCH variance.}
+\item{\code{sigma20}}{Numeric initial variances to prepend (length p+q).}
 }
 \if{html}{\out{</div>}}
 }
