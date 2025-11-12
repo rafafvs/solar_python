@@ -80,6 +80,7 @@ e_sigma2_h_mix <- function(h, omega, alpha, beta, e_x2 = 1, sigma2_t){
   return(sigma2_h)
 }
 
+
 #' Iterative GARCH second moment formula
 #'
 #' @inheritParams e_sigma2_h

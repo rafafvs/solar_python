@@ -52,6 +52,8 @@
 #' @keywords solarModel
 #' @note Version 1.0.0.
 #' @export
+#self <- Bologna$.__enclos_env__$self
+#private <- Bologna$.__enclos_env__$private
 solarModel <- R6::R6Class("solarModel",
                           # ====================================================================================================== #
                           #                                             Public slots
@@ -404,23 +406,14 @@ solarModel <- R6::R6Class("solarModel",
                               data_train <- dplyr::filter(data, isTrain & weights != 0)
                               # GARCH specification
                               GARCH_spec <- control$variance.model
-
-                              # Initialize the model
-                              GARCH_model <- GARCH_modelR6$new(GARCH_spec, data_train$eps_tilde, data_train$weights, sigma20 = 1)
+                              # Initialize a GARCH model
+                              GARCH_model <- sGARCH$new(GARCH_spec$archOrder, GARCH_spec$garchOrder)
                               # Control for garch variance
                               if (control$garch_variance) {
-                                # Monthly standardization to ensure QMLE consistency
-                                #data_train <- data_train %>%
-                                #  group_by(Month) %>%
-                                #  mutate(mu = mean(eps_tilde),
-                                #         sd = sd(eps_tilde),
-                                #         eps_tilde = (eps_tilde - mu)/sd)
-                                # Initialize the model
-                                GARCH_model <- GARCH_modelR6$new(GARCH_spec, data_train$eps_tilde, data_train$weights, sigma20 = 1)
                                 # Fit the model
-                                GARCH_model$fit()
+                                GARCH_model$fit(data_train$eps_tilde, data_train$weights)
                                 # Fitted std. deviation on true eps_tilde
-                                data$sigma <- GARCH_model$filter(data$eps_tilde)$sigma
+                                data$sigma <- sqrt(GARCH_model$filter(data$eps_tilde))
                                 # Fitted standardized residuals
                                 data$u_tilde <- data$eps_tilde / data$sigma
                               } else {
@@ -612,7 +605,7 @@ solarModel <- R6::R6Class("solarModel",
                               # **************************************************** #
                               # Update Garch standard deviation
                               if (self$spec$garch_variance) {
-                                private$..data[["sigma"]] <- self$GARCH$filter(private$..data[["eps_tilde"]])$sigma
+                                private$..data[["sigma"]] <- sqrt(self$GARCH$filter(private$..data[["eps_tilde"]]))
                               } else {
                                 private$..data[["sigma"]] <- 1
                               }
@@ -766,7 +759,7 @@ solarModel <- R6::R6Class("solarModel",
                           #                                             Private slots
                           # ====================================================================================================== #
                           private = list(
-                            version = "1.0.0",
+                            version = "1.0.1",
                             ..data = NA,
                             ..seasonal_data = NA,
                             ..monthly_data = NA,

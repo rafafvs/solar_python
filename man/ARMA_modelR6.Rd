@@ -20,13 +20,17 @@ Version 1.0.1
 \describe{
 \item{\code{model}}{An object with the fitted ARMA model from the function \code{\link[stats:arima]{stats::arima()}}.}
 
+\item{\code{arOrder}}{Numeric scalar, Autoregressive order.}
+
+\item{\code{maOrder}}{Numeric scalar, Moving Average order.}
+
+\item{\code{order}}{Numeric named vector, orders of the ARMA model. The first element is the AR order, while the second the MA order.}
+
 \item{\code{intercept}}{Numeric named scalar, intercept of the model.}
 
 \item{\code{phi}}{Numeric named vector, AR parameters.}
 
 \item{\code{theta}}{Numeric named vector, MA parameters.}
-
-\item{\code{order}}{Numeric named vector, ARMA order. The first element is the AR order, while the second the MA order.}
 
 \item{\code{coefficients}}{Numeric named vector, intercept and ARMA parameters.}
 

@@ -177,18 +177,12 @@ solarModel_spec <- R6::R6Class("solarModel_spec",
                                  set_variance.model = function(archOrder = 1, garchOrder = 1, garch_variance = TRUE){
                                    private$..garch_variance = garch_variance
                                    # Modify only if variance is not false
-                                   if (private$..garch_variance != FALSE) {
-                                     private$..variance.model = rugarch::ugarchspec(variance.model = list(garchOrder = c(archOrder,garchOrder), variance.targeting = 1),
-                                                                                    mean.model = list(armaOrder = c(0, 0), include.mean = FALSE))
-                                     if (archOrder == 0 & garchOrder == 0){
-                                       private$..garch_variance <- FALSE
-                                     } else {
-                                       private$..garch_variance <- TRUE
-                                     }
+                                   if (archOrder == 0 & garchOrder == 0){
+                                     private$..garch_variance <- FALSE
                                    } else {
-                                     private$..variance.model = rugarch::ugarchspec(variance.model = list(garchOrder = c(0,0), variance.targeting = 1),
-                                                                                    mean.model = list(armaOrder = c(0, 0), include.mean = FALSE))
+                                     private$..garch_variance <- TRUE
                                    }
+                                   private$..variance.model = list(archOrder = archOrder, garchOrder = garchOrder)
                                  },
                                  #' @description
                                  #' List with specification's parameters of the Gaussian mixture model for GARCH residuals \eqn{u_t = \tilde{e}_t/\sigma_t}.
@@ -223,10 +217,8 @@ solarModel_spec <- R6::R6Class("solarModel_spec",
                                    # Seasonal variance order
                                    sv_order <- self$seasonal.variance$order
                                    # GARCH order
-                                   par <- self$variance.model@model$modelinc
-                                   par_names <- names(par[par == 1])
-                                   archOrder <- sum(stringr::str_detect(par_names, "alpha"))
-                                   garchOrder <- sum(stringr::str_detect(par_names, "beta"))
+                                   archOrder <- self$variance.model$archOrder
+                                   garchOrder <- self$variance.model$garchOrder
                                    green <- function(x) paste0("\033[1;32m", x, "\033[0m")
                                    red <- function(x) paste0("\033[1;31m", x, "\033[0m")
                                    msg_col <- function(x) ifelse(x, green(x), red(x))

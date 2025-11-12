@@ -1,0 +1,292 @@
+---
+title: ''
+author: "Beniamino Sartini"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+omega_true <- 0.3
+alpha_true <- 0.5
+beta_true  <- 0.2
+# True
+coef_true <- c(omega_true, alpha_true, beta_true)
+set.seed(1)
+# GARCH simulation 
+x <- sGARCH_scenarios(B = 1, n = 20000, eps0 = 0, sigma2_0 = 1, 
+                        omega = omega_true, alpha = alpha_true, beta = beta_true,
+                        mu = c(0, 0), sd = c(1, 1), probs = c(1, 0))[[1]]$x
+```
+
+## Estimation 
+
+### Rugarch
+
+```{r}
+# Specification 
+spec <- rugarch::ugarchspec(variance.model = list(garchOrder = c(1, 1), variance.targeting = 1),
+                            mean.model = list(armaOrder = c(0, 0), include.mean = FALSE))
+# GARCH fit
+fit <- rugarch::ugarchfit(spec, x)
+# Coefficients 
+coef <- c(fit@fit$coef[3], fit@fit$coef[1:2])
+# Standard errors 
+std.errors <- c(fit@fit$se.coef[3], fit@fit$se.coef[1:2])
+std.errors_rob <- c(fit@fit$robust.se.coef[3], fit@fit$robust.se.coef[1:2])
+names(std.errors) <- names(std.errors_rob) <- names(coef)
+coef
+```
+
+### sGARCH
+
+```{r}
+# Fit 
+fit_2 <- sGARCH_fit(x, 1, 1)
+# Coefficients
+coef_2 <- fit_2$coef
+# Standard errors 
+std.errors_2 <- fit_2$std.errors
+std.errors_rob_2 <- fit_2$std.errors_rob
+coef_2
+```
+
+### Comparison 
+
+```{r}
+tibble(term = c("omega", "alpha1", "beta1"), 
+       true = coef_true, rugarch = coef, 
+       sGarch = coef_2)
+```
+
+```{r}
+tibble(term = c("omega", "alpha1", "beta1"), 
+       true = NA, rugarch = std.errors, 
+       sGarch = std.errors_2)
+```
+
+```{r}
+tibble(term = c("omega", "alpha1", "beta1"), 
+       true = NA, rugarch = std.errors_rob, 
+       sGarch = std.errors_rob_2)
+```
+
+## Filtering 
+
+```{r}
+sGARCH_filter_R <- function(x, omega, alpha, beta, eps0, sigma20){
+
+  # ARCH order
+  p <- length(alpha)
+  # GARCH order
+  q <- length(beta)
+  # Number of observations
+  n <- length(x)
+  # Maximum lag
+  k <- max(c(p, q))
+  # Initialize residuals
+  eps <- x
+  # Long term variance
+  sigma2_inf <- omega / (1 - sum(c(alpha, beta)))
+  sigma2 <- rep(sigma2_inf, n)
+  if (!missing(eps0) && !missing(sigma20)){
+    eps <- c(eps0, x)
+    sigma2 <- c(sigma20, sigma2)
+  }
+  # Number of observations
+  n <- length(eps)
+  t <- k+2
+  for(t in (k+1):n){
+    sigma2[t] <- omega + sum(alpha * eps[(t-1):(t-1-p+1)]^2) + sum(beta * sigma2[(t-1):(t-1-q+1)])
+  }
+  sigma2
+}
+```
+
+
+```{r}
+spec@model$fixed.pars <- fit@fit$coef[-3]
+rugarch::ugarchfilter(spec, x[1:10])@filter$sigma 
+sqrt(sGARCH_filter_R(x[1:10], coef[1], coef[2], coef[3], eps0 = 0, sigma20 = 0.2799379))
+```
+
+
+```{r}
+# R implementation 
+system.time(purrr::map(1:500, ~sGARCH_filter_R(x, coef[1], coef[2], coef[3], eps0 = 0, sigma20 = coef[1])))
+# Rugarch (5 faster than R)
+system.time(purrr::map(1:500, ~rugarch::ugarchfilter(spec, x)@filter$sigma))
+# C implementation (28 faster than rugarch, 130 faster than R)
+system.time(purrr::map(1:500, ~sGARCH_filter(x, coef[1], coef[2], coef[3], eps0 = 0, sigma20 = coef[1])))
+```
+
+## Slots
+
+```{r}
+# GARCH model 
+GARCH <- sGARCHR6$new(2, 0, mode = "unitOmega")
+#self <- GARCH$.__enclos_env__$self
+#private <- GARCH$.__enclos_env__$private
+GARCH$fit(x)
+
+GARCH$omega
+GARCH$alpha
+GARCH$beta
+GARCH$archOrder
+GARCH$garchOrder
+
+GARCH$vol
+GARCH$tidy
+GARCH$std.errors
+GARCH$loglik
+```
+
+
+
+## Tests
+
+```{r}
+
+# Case I: "unitOmega"
+mode <- "unitOmega"
+# GARCH(1, 0)
+archOrder <- 1
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(2, 0)
+archOrder <- 2
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(3, 0)
+archOrder <- 3
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(2, 1)
+archOrder <- 2
+garchOrder <- 1
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(3, 2)
+archOrder <- 3
+garchOrder <- 2
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+# Case II: "targetSigma2"
+mode <- "targetSigma2"
+# GARCH(1, 0)
+archOrder <- 1
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+# GARCH(2, 0)
+archOrder <- 2
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(3, 0)
+archOrder <- 3
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(2, 1)
+archOrder <- 2
+garchOrder <- 1
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(3, 2)
+archOrder <- 3
+garchOrder <- 2
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# Case III: "freeOmega"
+mode <- "freeOmega"
+# GARCH(1, 0)
+archOrder <- 1
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+# GARCH(2, 0)
+archOrder <- 2
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(3, 0)
+archOrder <- 3
+garchOrder <- 0
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(2, 1)
+archOrder <- 2
+garchOrder <- 1
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+
+
+# GARCH(3, 2)
+archOrder <- 3
+garchOrder <- 2
+sGARCH_fit(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_fit_rugarch(y, archOrder, garchOrder, mode)[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "rugarch")[1:4]
+sGARCH_robust_fit(y, archOrder, garchOrder, mode, method = "ML")[1:4]
+```
+
+
+

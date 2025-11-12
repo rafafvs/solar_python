@@ -46,7 +46,10 @@ solarMoments_conditional = function(data, theta = 0, control_model){
 #' @export
 solarMoments_unconditional = function(data, ARMA, GARCH, theta = 0){
   # ARMA variance
-  arma_variance <- sqrt(ARMA$variance)
+  arma_variance <- sqrt(ARMA$variance(1000)[1000])
+  # GARCH long term std. deviation
+  GARCH_vol <- GARCH$omega / (1 - sum(GARCH$coefficients[-1]))
+
   # Compute unconditional moments
   data <- dplyr::mutate(data,
                         # Change of measure
@@ -54,7 +57,7 @@ solarMoments_unconditional = function(data, ARMA, GARCH, theta = 0){
                         # Unconditional expectation Yt
                         e_Yt = ARMA$intercept + Yt_bar + Yt_tilde_uncond,
                         # Unconditional std. deviation Yt
-                        sd_Yt = sigma_bar * sigma_uncond * GARCH$vol * arma_variance,
+                        sd_Yt = sigma_bar * sigma_uncond * GARCH_vol * arma_variance,
                         # Unconditional moments Yt (state up)
                         M_Y1 = e_Yt + sd_Yt * (mu1 + sd1 * theta),
                         S_Y1 = sd_Yt * sd1,

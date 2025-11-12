@@ -14,9 +14,11 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             #' @param maOrder Numeric scalar, order for Moving-Average component.
                             #' @param include.intercept Logical. When `TRUE` the intercept will be included. The default is `FALSE`.
                             initialize = function(arOrder = 1, maOrder = 1, include.intercept = FALSE){
+                              # Logical value for the intercept parameter
                               private$include.intercept <- include.intercept
-                              # Store AR and MA orders
+                              # Store AR order
                               private$..arOrder <- arOrder
+                              # Store MA order
                               private$..maOrder <- maOrder
                               # Pre-compute vector b
                               private$..b <- ARMA_vector_b(arOrder, maOrder)
@@ -120,7 +122,7 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                               names_new <- names(coefficients)
                               # Warning
                               if (length(names_new) != length(names_old)) {
-                                cli::cli_alert_warning("In seasonalModel$update(): The lenght of new `coefficients` do not match the length of the old coefficients.")
+                                cli::cli_alert_warning("In ARMA_model$update(): The lenght of new `coefficients` do not match the length of the old coefficients.")
                               }
                               # Update only if they are present
                               for(i in 1:length(coefficients)){
@@ -167,7 +169,7 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                               names_new <- names(std.errors)
                               # Warning
                               if (length(names_new) != length(names_old)) {
-                                cli::cli_alert_warning("In seasonalModel$update_std.errors(): The lenght of new `std.errors` do not match the length of the old std. errors!")
+                                cli::cli_alert_warning("In ARMA_model$update_std.errors(): The lenght of new `std.errors` do not match the length of the old std. errors!")
                               }
                               # Update only if they are present
                               for(i in 1:length(std.errors)){
@@ -238,6 +240,18 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             model = function(){
                               private$..model
                             },
+                            #' @field arOrder Numeric scalar, Autoregressive order.
+                            arOrder = function(){
+                              private$..arOrder
+                            },
+                            #' @field maOrder Numeric scalar, Moving Average order.
+                            maOrder = function(){
+                              private$..maOrder
+                            },
+                            #' @field order Numeric named vector, orders of the ARMA model. The first element is the AR order, while the second the MA order.
+                            order = function(){
+                              c(AR = self$arOrder, MA = self$maOrder)
+                            },
                             #' @field intercept Numeric named scalar, intercept of the model.
                             intercept = function(){
                               private$..intercept
@@ -249,10 +263,6 @@ ARMA_modelR6 <- R6::R6Class("ARMA_modelR6",
                             #' @field theta Numeric named vector, MA parameters.
                             theta = function(){
                               private$..theta
-                            },
-                            #' @field order Numeric named vector, ARMA order. The first element is the AR order, while the second the MA order.
-                            order = function(){
-                              c(AR = private$..arOrder, MA = private$..maOrder)
                             },
                             #' @field coefficients Numeric named vector, intercept and ARMA parameters.
                             coefficients = function(){

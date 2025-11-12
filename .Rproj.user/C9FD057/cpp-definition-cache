@@ -1,6 +1,6 @@
 [
     {
-        "file": "/Users/macbook/Desktop/solarr/src/ARMA_filter_c.c",
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/ARMA_filter_c.c",
         "file_last_write": 1762464584.0,
         "definitions": [
             {
@@ -8,7 +8,7 @@
                 "kind": 6,
                 "parent_name": "",
                 "name": "dgemv_Ax(int, const double *, const double *, double *)",
-                "file": "/Users/macbook/Desktop/solarr/src/ARMA_filter_c.c",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/ARMA_filter_c.c",
                 "line": 7,
                 "column": 20,
                 "hidden": false
@@ -18,7 +18,7 @@
                 "kind": 6,
                 "parent_name": "",
                 "name": "ARMA_filter_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
-                "file": "/Users/macbook/Desktop/solarr/src/ARMA_filter_c.c",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/ARMA_filter_c.c",
                 "line": 19,
                 "column": 6,
                 "hidden": false
@@ -27,7 +27,7 @@
         "hidden": false
     },
     {
-        "file": "/Users/macbook/Desktop/solarr/src/ARMA_forecast_c.c",
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/ARMA_forecast_c.c",
         "file_last_write": 1762463446.0,
         "definitions": [
             {
@@ -35,7 +35,7 @@
                 "kind": 6,
                 "parent_name": "",
                 "name": "dgemv_Ax(const int, const double *, const double *, double *)",
-                "file": "/Users/macbook/Desktop/solarr/src/ARMA_forecast_c.c",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/ARMA_forecast_c.c",
                 "line": 7,
                 "column": 20,
                 "hidden": false
@@ -45,7 +45,7 @@
                 "kind": 6,
                 "parent_name": "",
                 "name": "ARMA_forecast_c(SEXP, SEXP, SEXP, SEXP, SEXP)",
-                "file": "/Users/macbook/Desktop/solarr/src/ARMA_forecast_c.c",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/ARMA_forecast_c.c",
                 "line": 20,
                 "column": 6,
                 "hidden": false
@@ -54,16 +54,16 @@
         "hidden": false
     },
     {
-        "file": "/Users/macbook/Desktop/solarr/src/init.c",
-        "file_last_write": 1762464619.0,
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/init.c",
+        "file_last_write": 1762909717.0,
         "definitions": [
             {
                 "usr": "c:@F@R_init_yourpkg",
                 "kind": 6,
                 "parent_name": "",
                 "name": "R_init_yourpkg(DllInfo *)",
-                "file": "/Users/macbook/Desktop/solarr/src/init.c",
-                "line": 18,
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/init.c",
+                "line": 26,
                 "column": 6,
                 "hidden": false
             }
@@ -71,7 +71,7 @@
         "hidden": false
     },
     {
-        "file": "/Users/macbook/Desktop/solarr/src/pow_matrix_c.c",
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/pow_matrix_c.c",
         "file_last_write": 1762391675.0,
         "definitions": [
             {
@@ -79,7 +79,7 @@
                 "kind": 6,
                 "parent_name": "",
                 "name": "dgemm_nn(const int, const int, const int, const double *, const double *, double *)",
-                "file": "/Users/macbook/Desktop/solarr/src/pow_matrix_c.c",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/pow_matrix_c.c",
                 "line": 7,
                 "column": 13,
                 "hidden": false
@@ -89,8 +89,116 @@
                 "kind": 6,
                 "parent_name": "",
                 "name": "pow_matrix_c(SEXP, SEXP)",
-                "file": "/Users/macbook/Desktop/solarr/src/pow_matrix_c.c",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/pow_matrix_c.c",
                 "line": 26,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_filter_c.c",
+        "file_last_write": 1762783576.0,
+        "definitions": [
+            {
+                "usr": "c:sGARCH_filter_c.c@F@max2",
+                "kind": 6,
+                "parent_name": "",
+                "name": "max2(double, double)",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_filter_c.c",
+                "line": 6,
+                "column": 22,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@sGARCH_filter_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "sGARCH_filter_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_filter_c.c",
+                "line": 8,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_covariance_c.c",
+        "file_last_write": 1762909008.0,
+        "definitions": [
+            {
+                "usr": "c:sGARCH_forecast_covariance_c.c@103@macro@IDX",
+                "kind": 9,
+                "parent_name": "",
+                "name": "IDX",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_covariance_c.c",
+                "line": 6,
+                "column": 9,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@sGARCH_forecast_covariance_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "sGARCH_forecast_covariance_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_covariance_c.c",
+                "line": 9,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_sigma2_c.c",
+        "file_last_write": 1762904258.0,
+        "definitions": [
+            {
+                "usr": "c:sGARCH_forecast_sigma2_c.c@76@macro@IDX",
+                "kind": 9,
+                "parent_name": "",
+                "name": "IDX",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_sigma2_c.c",
+                "line": 5,
+                "column": 9,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@sGARCH_forecast_sigma2_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "sGARCH_forecast_sigma2_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_sigma2_c.c",
+                "line": 8,
+                "column": 6,
+                "hidden": false
+            }
+        ],
+        "hidden": false
+    },
+    {
+        "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_sigma4_c.c",
+        "file_last_write": 1762904273.0,
+        "definitions": [
+            {
+                "usr": "c:sGARCH_forecast_sigma4_c.c@76@macro@IDX",
+                "kind": 9,
+                "parent_name": "",
+                "name": "IDX",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_sigma4_c.c",
+                "line": 5,
+                "column": 9,
+                "hidden": false
+            },
+            {
+                "usr": "c:@F@sGARCH_forecast_sigma4_c",
+                "kind": 6,
+                "parent_name": "",
+                "name": "sGARCH_forecast_sigma4_c(SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP, SEXP)",
+                "file": "/Users/macbook/Documents/University/PhD/Projects/solar-project/R/solarr/src/sGARCH_forecast_sigma4_c.c",
+                "line": 8,
                 "column": 6,
                 "hidden": false
             }
