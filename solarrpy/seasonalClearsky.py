@@ -1,11 +1,7 @@
 import numpy as np
 import pandas as pd
 import warnings
-from solarrpy import seasonalModel
-
-# Assuming SeasonalModel is defined in a file named seasonal_model.py
-# from seasonal_model import SeasonalModel 
-# If running in a single script, ensure the SeasonalModel class is defined above this.
+from solarrpy import SeasonalModel
 
 # --- 1. Placeholder Helpers for External R Dependencies ---
 # These functions replace the external R packages/functions used in the original code.
