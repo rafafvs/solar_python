@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # solarr
 
 ## Author
@@ -70,3 +71,6 @@ If you would like to contribute to **solarr**, please fork the repository and su
 ## Issues
 
 For any issues or feature requests, please open an issue on the GitHub repository.
+=======
+# solar_python
+>>>>>>> b6a33d717d90d7c961643c9313a1e5e4494e84cf
