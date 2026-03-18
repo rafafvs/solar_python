@@ -1,321 +1,422 @@
 import numpy as np
 import pandas as pd
+from scipy.optimize import minimize
+import copy
 import warnings
-from solarrpy import SeasonalModel
+from .seasonalModel import SeasonalModel
+from .seasonalSolarFunctions import SeasonalSolarFunctions
 
-# --- 1. Placeholder Helpers for External R Dependencies ---
-# These functions replace the external R packages/functions used in the original code.
-
-def control_seasonal_clearsky():
+def control_seasonalClearsky(order=1, order_H0=1, period=365, include_intercept=True, 
+                             include_trend=False, delta0=1.4, lower=0, upper=3, 
+                             by=0.001, ntol=0, quiet=False):
     """
-    Default control parameters dictionary.
+    Control parameters for a `seasonalClearsky` object
+    Returns a dictionary of control parameters.
     """
+    # Equivalent to R's structure(..., class = c("control", "list"))
     return {
-        'order': 1,
-        'period': 365,
-        'order_H0': 1,
-        'include_intercept': True,
-        'include_trend': False,
-        'delta0': 1.0,
-        'lower': 0.0,
-        'upper': 2.0,
-        'by': 0.01,
-        'ntol': 5
+        "order": order,
+        "order_H0": order_H0,
+        "period": period,
+        "include.intercept": include_intercept,  # Preserved dot notation in key for data mapping
+        "include.trend": include_trend,
+        "delta0": delta0,
+        "lower": lower,
+        "upper": upper,
+        "by": by,
+        "ntol": ntol,
+        "quiet": quiet
     }
 
-def number_of_day(dates):
-    """Returns the day of the year (1-366)."""
-    return pd.to_datetime(dates).dayofyear
-
-class SeasonalSolarFunctions:
+def clearsky_delta_optimizer(x, Ct, lower=0, upper=3, by=0.01, ntol=0):
     """
-    Mock implementation of seasonalSolarFunctions.
-    Calculates Extraterrestrial Radiation (H0).
+    Optimizer for Solar Clear sky.
+    Find the best parameter delta for fitting clear sky radiation.
     """
-    def __init__(self, algorithm="spencer"):
-        self.algorithm = algorithm
+    x = np.asarray(x)
+    Ct = np.asarray(Ct)
     
-    def Hon(self, n, lat, deriv=False):
-        """
-        Calculate extraterrestrial radiation or its derivative.
+    # Grid of points (R's seq includes upper bound)
+    grid = np.arange(lower, upper + by/2, by)
+    
+    # Loss: Equivalent to purrr::map_dbl
+    loss = np.array([np.sum((delta * Ct) - x < 0) for delta in grid])
+    
+    # opt dataframe and filtering
+    opt = pd.DataFrame({'delta': grid, 'loss': loss})
+    
+    # Return minimum delta satisfying the constraint (R's [1] translates to .iloc[0])
+    valid_opt = opt[opt['loss'] <= ntol]
+    if not valid_opt.empty:
+        delta = valid_opt.iloc[0]['delta']
+    else:
+        delta = np.nan # Fallback if no delta satisfies the condition
         
-        Args:
-            n (array-like): Day of year.
-            lat (float): Latitude.
-            deriv (bool): If True, return derivative.
-        """
-        # 
-        # Simplified placeholder logic:
-        rads = 2 * np.pi * n / 365
-        if deriv:
-            return -np.sin(rads) # Dummy derivative
-        return 10 + 5 * np.cos(rads) # Dummy H0 value
+    return delta
 
-def clearsky_delta_optimizer(Rt, Ct_hat_scaled, lower, upper, by, ntol):
+def clearsky_optimizer(seasonal_model_Ct, newdata, ntol=0):
     """
-    Placeholder for the optimization function.
-    Returns a scalar scaling factor (delta).
+    Optimizer for clear sky model with restricted least squares (RLS).
     """
-    # Logic to find optimal delta would go here
-    return 1.05 
+    # Clone the model. Using deepcopy or R6 equivalent .clone() 
+    if hasattr(seasonal_model_Ct, 'clone'):
+        sm = seasonal_model_Ct.clone(True)
+    else:
+        sm = copy.deepcopy(seasonal_model_Ct)
+        
+    def loss_function(params, sm_obj, data):
+        # Update the parameters
+        # If params is a numpy array but the class expects a pd.Series, we wrap it
+        if hasattr(sm_obj, 'coefficients') and isinstance(sm_obj.coefficients, pd.Series):
+            params_to_pass = pd.Series(params, index=sm_obj.coefficients.index)
+        else:
+            params_to_pass = params
+            
+        sm_obj.update(params_to_pass)
+        
+        # Prediction
+        pred = sm_obj.predict(newdata=data)
+        
+        # Violations: ifelse(data$GHI - pred > 0, 1, 0)
+        violations = np.where(data['GHI'] - pred > 0, 1, 0)
+        
+        # Check number of violations lower than ntol
+        mse = np.sum((data['GHI'] - pred)**2) + 1000000 * (np.sum(violations) - ntol)
+        return mse
 
-# --- 2. Main Class Conversion ---
+    # Initial parameters
+    init_params = sm.coefficients
+    init_vals = init_params.values if isinstance(init_params, pd.Series) else init_params
+
+    # Optimal parameters (R's optim defaults to Nelder-Mead for multi-variable without bounds)
+    opt = minimize(loss_function, init_vals, args=(sm, newdata), method='Nelder-Mead')
+    
+    # Update the parameters with the optimized array
+    if isinstance(init_params, pd.Series):
+        final_params = pd.Series(opt.x, index=init_params.index)
+    else:
+        final_params = opt.x
+        
+    sm.update(final_params)
+    
+    return sm
+
+def clearsky_outliers(x, Ct, date=None, threshold=0.0001, quiet=False):
+    """
+    Impute clear sky outliers.
+    Detect and impute outliers with respect to a maximum level of radiation (Ct)
+    """
+    # Initialize a dataset
+    data = pd.DataFrame({'Ct': Ct, 'x': x})
+    
+    # Eventually add a date for non-stationary data
+    if date is not None:
+        data['date'] = pd.to_datetime(date)
+        data['Month'] = data['date'].dt.month
+        data['Day'] = data['date'].dt.day
+
+    # Number of observations
+    nobs = len(data)
+    
+    # Detect problems and violations
+    outliers_na = data.index[data['x'].isna()].tolist()
+    outliers_lo = data.index[(data['x'] <= 0) & (~data['x'].isna())].tolist()
+    outliers_hi = data.index[(data['x'] >= data['Ct']) & (~data['x'].isna())].tolist()
+    
+    # Complete outliers index (unique elements)
+    idx_outliers = list(set(outliers_na + outliers_lo + outliers_hi))
+    
+    # Check presence of outliers and impute them
+    if not idx_outliers:
+        if not quiet:
+            print("No outliers!")
+        data_clean = data.copy()
+    else:
+        # Verbose message
+        if not quiet:
+            percentage = (len(idx_outliers) / nobs) * 100
+            print(f"Outliers: {len(idx_outliers)} ({percentage:.2f} %)")
+            
+        # Dataset without outliers
+        data_no_outliers = data.drop(index=idx_outliers)
+        
+        # Imputed dataset
+        data_clean = data.copy()
+        
+        # Impute outliers
+        for i in idx_outliers:
+            df_n = data.loc[i]
+            
+            if date is not None:
+                # Data for the same day and month (without outliers)
+                mask = (data_no_outliers['Month'] == df_n['Month']) & \
+                       (data_no_outliers['Day'] == df_n['Day']) & \
+                       (data_no_outliers['date'] != df_n['date'])
+                df_day = data_no_outliers[mask]
+            else:
+                df_day = data_no_outliers
+
+            # Imputed data depending on outliers type
+            if i in outliers_na:
+                # Outlier is an NA
+                data_clean.at[i, 'x'] = df_day['x'].mean()
+            elif i in outliers_lo:
+                # Outlier is under minimum value for the day
+                data_clean.at[i, 'x'] = df_day['x'].min()
+            elif i in outliers_hi:
+                # Outlier is above maximum value for the day
+                data_clean.at[i, 'x'] = data_clean.at[i, 'Ct'] * (1 - threshold)
+
+    if date is None:
+        out_date = None
+    else:
+        out_date = data.loc[idx_outliers, 'date'].tolist()
+
+    # Calculate errors identically to R
+    # mean(abs((data$x - data_clean$x)/data$x))*100
+    mape = np.mean(np.abs((data['x'] - data_clean['x']) / data['x'])) * 100
+    # sd(data$x - data_clean$x)
+    mse = np.std(data['x'] - data_clean['x'], ddof=1) # ddof=1 for sample standard deviation like R's sd()
+
+    # Structure output data
+    return {
+        "x": data_clean['x'].values,
+        "original": data.loc[idx_outliers, 'x'].values,
+        "imputed": data_clean.loc[idx_outliers, 'x'].values,
+        "index": idx_outliers,  # 0-based indexing in Python
+        "index_type": {"na": outliers_na, "lo": outliers_lo, "hi": outliers_hi},
+        "date": out_date,
+        "n": len(idx_outliers),
+        "MAPE": mape,
+        "MSE": mse,
+        "threshold": threshold
+    }
 
 class SeasonalClearsky(SeasonalModel):
     """
-    R6 implementation for a clear sky seasonal model.
-    
-    Inherits from SeasonalModel.
-    Version: 1.0.1
+    R6 implementation for a clear sky seasonal model
+    Version 1.0.1
     """
 
     def __init__(self, control=None):
         """
-        Initialize a `SeasonalClearsky` object.
-        
-        Args:
-            control (dict): Control parameters.
+        Initialize a `seasonalClearsky` object.
+        :param control: dict, control parameters. See `control_seasonalClearsky` for more details.
         """
         if control is None:
-            control = control_seasonal_clearsky()
+            control = control_seasonalClearsky()
             
-        # Initialize parent with order and period from control
-        super().__init__(order=control.get('order', 1), period=control.get('period', 365))
+        # Call parent initializer to set up the inherited attributes
+        super().__init__(order=control['order'], period=control['period'])
         
         self.lat = np.nan
-        self._control = control
-        self._ssf = None  # seasonalSolarFunctions instance
-        self._coefficients_orig = None
-        self._delta = None
-        self._version = "1.0.1"
+        
+        # Private fields
+        self.__version = "1.0.1"
+        self.__coefficients_orig = None
+        self.__delta = np.nan
+        self.__ssf = None
+        self.__control = control
+        
+        # R code directly overwrote these inherited private properties, 
+        # but in Python they are already set via super().__init__()
+        # self._SeasonalModel__order = control['order']
+        # self._SeasonalModel__period = control['period']
 
     @property
     def control(self):
-        return self._control
+        """Named list (dict in Python), control parameters."""
+        return self.__control
 
     @property
     def ssf(self):
-        return self._ssf
+        """Solar Seasonal Functions"""
+        return self.__ssf
 
     def fit(self, x, date, lat, clearsky=None):
         """
         Fit the seasonal model for clear sky radiation.
-
-        Args:
-            x (array-like): Time series of solar radiation (Rt).
-            date (array-like): Time series of dates.
-            lat (float): Reference latitude.
-            clearsky (array-like): Time series of target clear sky radiation.
         """
+        control = self.control
+        include_intercept = control['include.intercept']
+        include_trend = control['include.trend']
+        
         if clearsky is None:
             raise ValueError("`clearsky` time series must be specified.")
             
-        # Extract control parameters
-        control = self.control
-        include_intercept = control.get('include_intercept', True)
-        include_trend = control.get('include_trend', False)
-        order_H0 = control.get('order_H0', 1)
-
-        # Initialize Solar Functions
-        self._ssf = SeasonalSolarFunctions("spencer")
+        # Add the function to compute extraterrestrial radiation
+        self.__ssf = SeasonalSolarFunctions("spencer")
         
-        # Store latitude (handle scalar)
-        self.lat = lat if np.isscalar(lat) else lat[0]
+        # Store reference latitude (handle scalar or array-like)
+        self.lat = lat[0] if isinstance(lat, (list, tuple, np.ndarray, pd.Series)) else lat
         
         # Initialize the dataset
-        dates = pd.to_datetime(date)
-        data = pd.DataFrame({'date': dates})
-        
-        data['Year'] = dates.year
-        data['Month'] = dates.month
-        data['Day'] = dates.day
+        date_series = pd.to_datetime(date)
+        data = pd.DataFrame({'date': date_series})
+        data['Year'] = data['date'].dt.year
+        data['Month'] = data['date'].dt.month
+        data['Day'] = data['date'].dt.day
         data['t'] = data['Year'] - data['Year'].max()
-        data['n'] = number_of_day(dates)
+        data['n'] = data['date'].dt.dayofyear
         data['Rt'] = x
         
-        # Compute Extraterrestrial Radiation (H0)
-        data['H0'] = self._ssf.Hon(data['n'], self.lat)
+        # Note: Hon requires alt. We pass alt=None as the R code implicitly omitted it.
+        data['H0'] = self.ssf.Hon(data['n'], self.lat, alt=None)
         data['clearsky'] = clearsky
         
         # ========================================================================
-        # 1. Daily maximum clearsky fit
-        # Formula: clearsky ~ H0 + H0^2 + ... + trend + seasonal
+        # 1. Daily maximum clearsky
         # ========================================================================
-        
         base_formula = "clearsky ~ H0"
         
-        # Add polynomial terms for H0
-        if order_H0 > 1:
-            for i in range(2, order_H0 + 1):
+        if control['order_H0'] > 1:
+            for i in range(2, control['order_H0'] + 1):
                 col_name = f"H0_{i}"
                 data[col_name] = data['H0'] ** i
                 base_formula += f" + {col_name}"
                 
-        # Add trend
         if include_trend:
             base_formula += " + t"
             
-        # Handle Intercept
         if not include_intercept:
             base_formula += " - 1"
             
-        # Fit coefficients using parent method
-        super().fit(formula=base_formula, data=data)
+        formula_to_fit = getattr(base_formula, 'value', str(base_formula))
+        # Fit the coefficients of the clear sky max model
+        super().fit(formula=formula_to_fit, data=data)
         
         # Initial fit average clear sky
         data['Ct_hat'] = self.predict(newdata=data)
         
+        # Optimize the fit (subsetting columns)
+        data = data[['n', 't', 'H0', 'Rt', 'Ct_hat']]
+        
         # ========================================================================
         # 2. Optimization
         # ========================================================================
-        
-        # Optimize the fit using the helper function
-        delta_res = clearsky_delta_optimizer(
-            Rt=data['Rt'].values, 
-            Ct_hat_scaled=data['Ct_hat'].values * control.get('delta0', 1.0), 
-            lower=control.get('lower'), 
-            upper=control.get('upper'), 
-            by=control.get('by'), 
-            ntol=control.get('ntol')
+        delta_val = clearsky_delta_optimizer(
+            data['Rt'], data['Ct_hat'] * control['delta0'], 
+            control['lower'], control['upper'], control['by'], control['ntol']
         )
         
-        # --- Rename Coefficients (Mirroring R logic) ---
-        # The R code renames coefficients to specific domain names (delta_0, delta_extra, etc.)
-        
-        orig_names = list(self._model.params.index)
+        # Standard names for coefficients
         coefs_names = []
+        # Get original names from SeasonalModel (using property rather than mangled private attribute directly)
+        orig_names = list(self.coefficients.index)
         
-        # Note: We iterate specifically to match the order expected by the R script logic.
-        
-        # 1. Intercept -> delta_0
         if include_intercept:
-            if "Intercept" in orig_names:
-                coefs_names.append("delta_0")
-                orig_names.remove("Intercept")
-        
-        # 2. H0 terms -> delta_extra
-        if "H0" in orig_names:
-             coefs_names.append("delta_extra1")
-             orig_names.remove("H0")
-             
-        for i in range(2, order_H0 + 1):
-            name = f"H0_{i}"
-            if name in orig_names:
+            coefs_names.append("delta_0")
+            orig_names.pop(0)
+            for i in range(1, control['order_H0'] + 1):
                 coefs_names.append(f"delta_extra{i}")
-                orig_names.remove(name)
-        
-        # 3. Trend -> t
-        if include_trend and "t" in orig_names:
-            coefs_names.append("t")
-            orig_names.remove("t")
-            
-        # 4. Seasonal Terms -> delta_{original_name}
-        # Any remaining terms are assumed to be seasonal sine/cosine terms
-        for name in orig_names:
-            coefs_names.append(f"delta_{name}")
-            
-        # Store original coefficients
-        self._coefficients_orig = self.coefficients.copy()
-        self._delta = delta_res * control.get('delta0', 1.0)
-        
-        # Update coefficients values by scaling with delta
-        new_coefs = self.coefficients * self._delta
-        
-        # Apply new names if dimensions match
-        if len(new_coefs) == len(coefs_names):
-            new_coefs.index = coefs_names
-            self._model.params = new_coefs
-            
-            # Update standard errors
-            new_se = self.std_errors * self._delta
-            new_se.index = coefs_names
-            self.update_std_errors(new_se)
+                orig_names.pop(0)
         else:
-            warnings.warn("Coefficient name mapping mismatch. Updating values without renaming.")
-            self.update(new_coefs)
+            for i in range(1, control['order_H0'] + 1):
+                coefs_names.append(f"delta_extra{i}")
+                orig_names.pop(0)
+                
+        if include_trend:
+            coefs_names.append("t")
+            orig_names.pop(0)
+            
+        # Ensure self.order evaluates correctly if it's a list or scalar
+        order_val = self.order[0] if isinstance(self.order, list) else self.order
+        if order_val > 0:
+            for name in orig_names:
+                coefs_names.append(f"delta_{name}")
+
+        # Store original coefficients
+        self.__coefficients_orig = self.coefficients.copy()
+        
+        # Store delta parameter
+        self.__delta = delta_val * control['delta0']
+        
+        # Retrieve internal values to scale and update
+        current_coefs = self.coefficients.copy() * self.__delta
+        current_std_errs = self.std_errors.copy() * self.__delta
+        
+        # Update coefficients values
+        super().update(current_coefs)
+        
+        # Directly update the coefficient names to mimic R's env manipulation
+        self._SeasonalModel__coef_names = coefs_names
+        
+        # Update std errors values and names
+        super().update_std_errors(current_std_errs)
+        
+        # Re-index std_errors to reflect the new names
+        new_std_errs = self.std_errors
+        new_std_errs.index = coefs_names
+        self._SeasonalModel__std_errors = new_std_errs
 
     def predict(self, n=None, newdata=None):
         """
         Predict method for `seasonalClearsky` object.
         """
-        control = self.control
-        order_H0 = control.get('order_H0', 1)
-        
         if newdata is None:
             if n is None:
-                # Use fitted values from internal model
-                return self._model.predict()
+                # Assuming super() predict maps correctly without args to fitted values
+                return super().predict()
             else:
-                # Construct newdata from n, calculating H0
-                H0 = self._ssf.Hon(n, self.lat)
-                newdata_df = pd.DataFrame({'n': n, 'H0': H0})
+                n_arr = np.atleast_1d(n)
+                H0 = self.ssf.Hon(n_arr, self.lat, alt=None)
+                newdata_df = pd.DataFrame({'n': n_arr, 'H0': H0})
                 
-                # Add polynomial terms
-                if order_H0 > 1:
-                    for i in range(2, order_H0 + 1):
+                if self.control['order_H0'] > 1:
+                    for i in range(2, self.control['order_H0'] + 1):
                         newdata_df[f"H0_{i}"] = newdata_df['H0'] ** i
-                
-                return self._model.predict(exog=newdata_df)
-        else:
-            # If newdata is provided
-            # If 'n' is present but 'H0' is missing, calculate H0
-            if 'H0' not in newdata.columns and 'n' in newdata.columns:
-                 newdata['H0'] = self._ssf.Hon(newdata['n'], self.lat)
-            
-            # Add polynomial terms if missing
-            if order_H0 > 1:
-                for i in range(2, order_H0 + 1):
-                    col = f"H0_{i}"
-                    if col not in newdata.columns:
-                        newdata[col] = newdata['H0'] ** i
                         
-            return self._model.predict(exog=newdata)
+                return super().predict(newdata=newdata_df)
+        else:
+            newdata = newdata.copy()
+            newdata['H0'] = self.ssf.Hon(newdata['n'], self.lat, alt=None)
+            
+            if self.control['order_H0'] > 1:
+                for i in range(2, self.control['order_H0'] + 1):
+                    newdata[f"H0_{i}"] = newdata['H0'] ** i
+                    
+            return super().predict(newdata=newdata)
 
     def differential(self, n=None, newdata=None):
         """
         Differential method for `seasonalClearsky` object.
         """
-        control = self.control
-        order_H0 = control.get('order_H0', 1)
-        
         if newdata is None:
             if n is None:
-                return self._dmodel.predict()
+                return super().differential()
             else:
-                # Calculate derivative of H0
-                H0_deriv = self._ssf.Hon(n, self.lat, deriv=True)
-                newdata_df = pd.DataFrame({'n': n, 'H0': H0_deriv})
+                n_arr = np.atleast_1d(n)
+                H0 = self.ssf.Hon(n_arr, self.lat, alt=None, deriv=True)
+                newdata_df = pd.DataFrame({'n': n_arr, 'H0': H0})
                 
-                # Apply polynomial chain rule logic from R script
-                # R: newdata[[paste0("H0_", i)]] <- i * newdata$H0^(i-1)
-                if order_H0 > 1:
-                    for i in range(2, order_H0 + 1):
-                         newdata_df[f"H0_{i}"] = i * (newdata_df['H0'] ** (i-1))
-                
-                return self._dmodel.predict(exog=newdata_df)
-        else:
-            if 'H0' not in newdata.columns and 'n' in newdata.columns:
-                newdata['H0'] = self._ssf.Hon(newdata['n'], self.lat, deriv=True)
-            
-            if order_H0 > 1:
-                for i in range(2, order_H0 + 1):
-                    col = f"H0_{i}"
-                    if col not in newdata.columns:
-                        # R logic assumes H0 column holds the base for the power rule here
-                        newdata[col] = i * (newdata['H0'] ** (i-1))
+                if self.control['order_H0'] > 1:
+                    for i in range(2, self.control['order_H0'] + 1):
+                        # NOTE: Translating exactly as written in R.
+                        newdata_df[f"H0_{i}"] = i * (newdata_df['H0'] ** (i - 1))
                         
-            return self._dmodel.predict(exog=newdata)
-
-    def __repr__(self):
-        msg = []
-        msg.append("----------------------- SeasonalClearsky -----------------------")
-        msg.append(f" - Order: {self.order}")
-        msg.append(f" - Period: {self.period}")
-        msg.append("- External regressors: 1 (H0)")
-        msg.append(f"- Version: {self._version}")
-        msg.append("--------------------------------------------------------------")
-        if self._model is not None:
-             msg.append(str(self.coefficients))
+                return super().differential(newdata=newdata_df)
         else:
-             msg.append("Model not fitted.")
-        return "\n".join(msg)
+            newdata = newdata.copy()
+            newdata['H0'] = self.ssf.Hon(newdata['n'], self.lat, alt=None, deriv=True)
+            
+            if self.control['order_H0'] > 1:
+                for i in range(2, self.control['order_H0'] + 1):
+                    # NOTE: Translating exactly as written in R.
+                    newdata[f"H0_{i}"] = i * (newdata['H0'] ** (i - 1))
+                    
+            return super().differential(newdata=newdata)
+
+    def __str__(self):
+        """Print method for `seasonalClearsky` object."""
+        msg = "----------------------- seasonalClearsky ----------------------- \n"
+        msg += f" - Order: {self.order}\n - Period: {self.period}\n"
+        msg += "- External regressors: 1 (H0) \n"
+        msg += f"- Version: {self.__version}\n"
+        msg += "--------------------------------------------------------------\n"
+        if self.model is not None:
+            msg += str(self.model.summary().tables[1])
+        return msg
+        
+    def __repr__(self):
+        return self.__str__()
+
