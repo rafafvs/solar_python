@@ -233,10 +233,19 @@ class SeasonalClearsky(SeasonalModel):
         """Solar Seasonal Functions"""
         return self.__ssf
 
-    def fit(self, x, date, lat, clearsky=None):
+    def fit(self, x, date, lat, clearsky=None, method="paper"):
         """
         Fit the seasonal model for clear sky radiation.
+        :param x: Numeric vector, time series of actual solar radiation (GHI).
+        :param date: Time index/dates.
+        :param lat: Reference latitude.
+        :param clearsky: CAMS clear sky data.
+        :param method: 'repo' (2-step uniform scaling heuristic) or 'paper' (1-step Constrained Least Squares).
         """
+
+        if method not in ["repo", "paper"]:
+            raise ValueError("method must be either 'repo' or 'paper'")
+
         control = self.control
         include_intercept = control['include.intercept']
         include_trend = control['include.trend']
@@ -258,11 +267,11 @@ class SeasonalClearsky(SeasonalModel):
         data['Day'] = data['date'].dt.day
         data['t'] = data['Year'] - data['Year'].max()
         data['n'] = data['date'].dt.dayofyear
-        data['Rt'] = x
+        data['Rt'] = np.asarray(x)
         
         # Note: Hon requires alt. We pass alt=None as the R code implicitly omitted it.
         data['H0'] = self.ssf.Hon(data['n'], self.lat, alt=None)
-        data['clearsky'] = clearsky
+        data['clearsky'] = np.asarray(clearsky)
         
         # ========================================================================
         # 1. Daily maximum clearsky
@@ -282,23 +291,73 @@ class SeasonalClearsky(SeasonalModel):
             base_formula += " - 1"
             
         formula_to_fit = getattr(base_formula, 'value', str(base_formula))
+        
         # Fit the coefficients of the clear sky max model
+        # We always run the unconstrained OLS first to build the design matrix and get a starting point
         super().fit(formula=formula_to_fit, data=data)
         
-        # Initial fit average clear sky
-        data['Ct_hat'] = self.predict(newdata=data)
-        
-        # Optimize the fit (subsetting columns)
-        data = data[['n', 't', 'H0', 'Rt', 'Ct_hat']]
+        # ========================================================================
+        # 2. Optimization Branching
+        # ========================================================================
+        if method == "repo":
+            # --- The Package's 2-Step Heuristic ---
+            data['Ct_hat'] = self.predict(newdata=data)
+            
+            delta_val = clearsky_delta_optimizer(
+                data['Rt'], data['Ct_hat'] * control['delta0'], 
+                control['lower'], control['upper'], control['by'], control['ntol']
+            )
+            
+            # Store delta parameter
+            self.__delta = delta_val * control['delta0']
+            
+            # Scale OLS coefficients and std errors uniformly
+            current_coefs = self.coefficients.copy() * self.__delta
+            current_std_errs = self.std_errors.copy() * self.__delta
+
+        elif method == "paper":
+            # --- The Paper's 1-Step Constrained Least Squares (CLS) ---
+            from scipy.optimize import minimize, LinearConstraint
+            
+            # Extract Design Matrix (X) and Target (y) from the statsmodels object
+            X = self.model.model.exog
+            y_target = data['clearsky'].values
+            ghi = data['Rt'].values
+            
+            def objective_function(beta):
+                return np.sum((X.dot(beta) - y_target)**2)
+
+            def objective_jacobian(beta):
+                return 2 * X.T.dot(X.dot(beta) - y_target)
+
+            # Strict constraint: C_t >= R_t  =>  X @ beta >= GHI
+            linear_constraint = LinearConstraint(X, lb=ghi, ub=np.inf)
+            ols_start = self.coefficients.values
+            
+            if not control.get('quiet', False):
+                print("Running Constrained Least Squares (Paper method)...")
+                
+            cls_result = minimize(
+                objective_function, 
+                x0=ols_start, 
+                method='trust-constr', 
+                jac=objective_jacobian,
+                constraints=[linear_constraint],
+                options={'maxiter': 10000, 'verbose': 0}
+            )
+            
+            if not cls_result.success:
+                warnings.warn(f"Constrained optimization failed or reached maxiter: {cls_result.message}")
+            
+            self.__delta = 1.0 # No scalar multiplier used in this method
+            current_coefs = pd.Series(cls_result.x, index=self.coefficients.index)
+            # The paper keeps the OLS standard errors (dependent purely on X'X) 
+            current_std_errs = self.std_errors.copy() 
         
         # ========================================================================
-        # 2. Optimization
+        # 3. Naming Convention & Property Updating (Shared Logic)
         # ========================================================================
-        delta_val = clearsky_delta_optimizer(
-            data['Rt'], data['Ct_hat'] * control['delta0'], 
-            control['lower'], control['upper'], control['by'], control['ntol']
-        )
-        
+
         # Standard names for coefficients
         coefs_names = []
         # Get original names from SeasonalModel (using property rather than mangled private attribute directly)
@@ -327,13 +386,6 @@ class SeasonalClearsky(SeasonalModel):
 
         # Store original coefficients
         self.__coefficients_orig = self.coefficients.copy()
-        
-        # Store delta parameter
-        self.__delta = delta_val * control['delta0']
-        
-        # Retrieve internal values to scale and update
-        current_coefs = self.coefficients.copy() * self.__delta
-        current_std_errs = self.std_errors.copy() * self.__delta
         
         # Update coefficients values
         super().update(current_coefs)
