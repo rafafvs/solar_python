@@ -394,6 +394,8 @@ class SeasonalModel:
         msg += "--------------------------------------------------------------\n"
         if self.__model is not None:
             msg += str(self.__model.summary().tables[1]) # Only print coef table to mimic R print
+        #params = self.__model.params
+        #msg = f"{params.iloc[0]:.4f}, {params.iloc[1]:.4f}, {params.iloc[2]:.4f}, {params.iloc[3]:.4f}"
         return msg
         
     def __repr__(self):
