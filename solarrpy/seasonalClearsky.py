@@ -155,7 +155,7 @@ def clearsky_outliers(x, Ct, date=None, threshold=0.0001, quiet=False):
                 df_day = data_no_outliers[mask]
             else:
                 df_day = data_no_outliers
-
+        
             # Imputed data depending on outliers type
             if i in outliers_na:
                 # Outlier is an NA
@@ -210,6 +210,7 @@ class SeasonalClearsky(SeasonalModel):
         super().__init__(order=control['order'], period=control['period'])
         
         self.lat = np.nan
+        self.alt = np.nan
         
         # Private fields
         self.__version = "1.0.1"
@@ -233,7 +234,7 @@ class SeasonalClearsky(SeasonalModel):
         """Solar Seasonal Functions"""
         return self.__ssf
 
-    def fit(self, x, date, lat, clearsky=None, method="paper"):
+    def fit(self, x, date, lat, alt, clearsky=None, H0=None, method="paper"):
         """
         Fit the seasonal model for clear sky radiation.
         :param x: Numeric vector, time series of actual solar radiation (GHI).
@@ -258,6 +259,7 @@ class SeasonalClearsky(SeasonalModel):
         
         # Store reference latitude (handle scalar or array-like)
         self.lat = lat[0] if isinstance(lat, (list, tuple, np.ndarray, pd.Series)) else lat
+        self.alt = alt[0] if isinstance(alt, (list, tuple, np.ndarray, pd.Series)) else alt
         
         # Initialize the dataset
         date_series = pd.to_datetime(date)
@@ -270,7 +272,10 @@ class SeasonalClearsky(SeasonalModel):
         data['Rt'] = np.asarray(x)
         
         # Note: Hon requires alt. We pass alt=None as the R code implicitly omitted it.
-        data['H0'] = self.ssf.Hon(data['n'], self.lat, alt=None)
+        if H0 is None:
+            H0 = self.ssf.Hon(data['n'], self.lat, self.alt)
+        
+        data['H0'] = np.asarray(H0)
         data['clearsky'] = np.asarray(clearsky)
         
         # ========================================================================
@@ -411,7 +416,7 @@ class SeasonalClearsky(SeasonalModel):
                 return super().predict()
             else:
                 n_arr = np.atleast_1d(n)
-                H0 = self.ssf.Hon(n_arr, self.lat, alt=None)
+                H0 = self.ssf.Hon(n_arr, self.lat, self.alt)
                 newdata_df = pd.DataFrame({'n': n_arr, 'H0': H0})
                 
                 if self.control['order_H0'] > 1:
@@ -421,7 +426,7 @@ class SeasonalClearsky(SeasonalModel):
                 return super().predict(newdata=newdata_df)
         else:
             newdata = newdata.copy()
-            newdata['H0'] = self.ssf.Hon(newdata['n'], self.lat, alt=None)
+            newdata['H0'] = self.ssf.Hon(newdata['n'], self.lat, self.alt)
             
             if self.control['order_H0'] > 1:
                 for i in range(2, self.control['order_H0'] + 1):
@@ -438,7 +443,7 @@ class SeasonalClearsky(SeasonalModel):
                 return super().differential()
             else:
                 n_arr = np.atleast_1d(n)
-                H0 = self.ssf.Hon(n_arr, self.lat, alt=None, deriv=True)
+                H0 = self.ssf.Hon(n_arr, self.lat, self.alt, deriv=True)
                 newdata_df = pd.DataFrame({'n': n_arr, 'H0': H0})
                 
                 if self.control['order_H0'] > 1:
@@ -449,7 +454,7 @@ class SeasonalClearsky(SeasonalModel):
                 return super().differential(newdata=newdata_df)
         else:
             newdata = newdata.copy()
-            newdata['H0'] = self.ssf.Hon(newdata['n'], self.lat, alt=None, deriv=True)
+            newdata['H0'] = self.ssf.Hon(newdata['n'], self.lat, self.alt, deriv=True)
             
             if self.control['order_H0'] > 1:
                 for i in range(2, self.control['order_H0'] + 1):
@@ -467,6 +472,8 @@ class SeasonalClearsky(SeasonalModel):
         msg += "--------------------------------------------------------------\n"
         if self.model is not None:
             msg += str(self.model.summary().tables[1])
+        #params = self.model.params
+        #msg = f"{params.iloc[0]:.4f}, {params.iloc[1]:.4f}, {params.iloc[2]:.4f}, {params.iloc[3]:.4f}"
         return msg
         
     def __repr__(self):
