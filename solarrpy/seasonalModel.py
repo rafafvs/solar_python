@@ -1,446 +1,309 @@
 import numpy as np
 import pandas as pd
-import statsmodels.formula.api as smf
-from patsy import build_design_matrices
+import statsmodels.api as sm
 import warnings
 
-class FormulaString(str):
-    """
-    Helper class to replicate R's ability to attach attributes (like 'coef_names') 
-    to a formula string.
-    """
-    def __new__(cls, value, coef_names=None):
-        obj = str.__new__(cls, value)
-        obj.coef_names = coef_names if coef_names is not None else []
-        return obj
-
-def seasonalModel_formula(formula, order=1, period=365, sin=True, cos=True, t_idx="n"):
-    """
-    Create a Fourier formula
-    """
-    if order == 0:
-        return formula
+def add_seasonal_features(data, time_col="n", orders=[1], periods=[365], sin = True, cos = True):
+    """Returns a new dataframe with Fourier columns added."""
+    # Work on a copy to avoid mutating the original data
+    X = data.copy()
     
-    # Extract existing coefficient names if the attribute exists
-    coefs_names_attr = getattr(formula, "coef_names", [])
-    coefs_names = []
-    base_formula = str(formula)
+    # Standardize inputs to lists so we can iterate cleanly
+    periods = periods if isinstance(periods, list) else [periods]
+    orders = orders if isinstance(orders, list) else [orders]
     
-    # Add sin terms
-    if sin:
-        new_coef_name = f"sin_{order}_{period}"
-        if new_coef_name not in coefs_names_attr:
-            # Translated `base::pi` to `np.pi` for Python compatibility (e.g., Patsy/Statsmodels)
-            base_formula += f" + I(np.sin(2 * np.pi / {period} * {t_idx} * {order}))"
-            coefs_names.append(new_coef_name)
-            
-    # Add cos terms
-    if cos:
-        new_coef_name = f"cos_{order}_{period}"
-        if new_coef_name not in coefs_names_attr:
-            base_formula += f" + I(np.cos(2 * np.pi / {period} * {t_idx} * {order}))"
-            coefs_names.append(new_coef_name)
-
-    # Return new string with updated attributes
-    return FormulaString(base_formula, coef_names=coefs_names_attr + coefs_names)
-
-
-def seasonalModel_formula_dt(formula, order=1, period=365, sin=True, cos=True, t_idx="n"):
-    """
-    Create a Fourier formula for the differential
-    """
-    if order == 0:
-        return formula
+    # If only one order is provided, stretch it to match the number of periods
+    orders_to_use = [orders[0]] * len(periods) if len(orders) == 1 else orders
     
-    coefs_names_attr = getattr(formula, "coef_names", [])
-    coefs_names = []
-    base_formula = str(formula)
+    # Generate the features using native vectorized math
+    for j, period in enumerate(periods):
+        order = orders_to_use[j]
+        for i in range(1, order + 1):
+            if sin:
+                X[f'sin_{i}_{period}'] = np.sin(2 * np.pi / period * X[time_col] * i)
+            if cos:
+                X[f'cos_{i}_{period}'] = np.cos(2 * np.pi / period * X[time_col] * i)
+
+    # Return the new dataframe with the seasonal features
+    return X
+
+def add_seasonal_features_dt(data, time_col="n", orders=[1], periods=[365], sin = True, cos = True):
+    """Returns a new dataframe with Fourier columns added."""
+    # Work on a copy to avoid mutating the original data
+    X = data.copy()
+
+    # Standardize inputs to lists so we can iterate cleanly
+    periods = periods if isinstance(periods, list) else [periods]
+    orders = orders if isinstance(orders, list) else [orders]
     
-    # Add sin terms
-    if sin:
-        new_coef_name = f"sin_{order}_{period}"
-        if new_coef_name not in coefs_names_attr:
-            base_formula += f" + I({order} * 2 * np.pi / {period} * np.cos(2 * np.pi / {period} * {t_idx} * {order}))"
-            coefs_names.append(new_coef_name)
-            
-    # Add cos terms
-    if cos:
-        new_coef_name = f"cos_{order}_{period}"
-        if new_coef_name not in coefs_names_attr:
-            # NOTE: Preserved exact original logic, which computes the derivative of cos without the negative sign
-            base_formula += f" + I({order} * 2 * np.pi / {period} * np.sin(2 * np.pi / {period} * {t_idx} * {order}))"
-            coefs_names.append(new_coef_name)
-
-    return FormulaString(base_formula, coef_names=coefs_names_attr + coefs_names)
-
+    # If only one order is provided, stretch it to match the number of periods
+    orders_to_use = [orders[0]] * len(periods) if len(orders) == 1 else orders
+    
+    # Generate the features using native vectorized math
+    for j, period in enumerate(periods):
+        order = orders_to_use[j]
+        for i in range(1, order + 1):
+            if sin:
+                X[f'sin_{i}_{period}'] = 2 * np.pi * i / period * np.cos(2 * np.pi * i / period * X[time_col])
+            if cos:
+                X[f'cos_{i}_{period}'] = 2 * np.pi * i / period * np.sin(2 * np.pi * i / period * X[time_col])
+    
+    return X
 
 def seasonalModel_params_to_zeta(b):
-    """
-    From constraint to unconstrained parameters
-    """
-    # Accommodate pandas Series to preserve names like R's named vectors
-    b_vals = b.values if isinstance(b, pd.Series) else b
-    
-    # Reparametrized coefficients (0-based indexing)
-    b0_star = np.log(b_vals[0])
-    b1_star = np.arctanh(np.sqrt(b_vals[1]**2 + b_vals[2]**2) / b_vals[0])
-    b2_star = np.arctan2(b_vals[1], b_vals[2]) # np.arctan2(y, x) matches R's atan2(y, x)
-    
-    b_star_vals = [b0_star, b1_star, b2_star]
-    
-    if isinstance(b, pd.Series):
-        names = [f"{name}_star" for name in b.index]
-        return pd.Series(b_star_vals, index=names)
-    else:
-        return np.array(b_star_vals)
+    """Constrained (b0, b1, b2) to unconstrained (b0_star, b1_star, b2_star)."""
 
+    b0_star = np.log(b[0])
+    b1_star = np.arctanh(np.sqrt(b[1]**2 + b[2]**2) / b[0])
+    b2_star = np.arctan2(b[1], b[2])
+
+    return np.array([b0_star, b1_star, b2_star])
 
 def seasonalModel_params_to_phi(b_star):
-    """
-    From unconstrained to constraint parameters
-    """
-    b_star_vals = b_star.values if isinstance(b_star, pd.Series) else b_star
-    
-    # Reparametrized coefficients
-    b0 = np.exp(b_star_vals[0])
-    b1 = b0 * np.tanh(b_star_vals[1]) * np.sin(b_star_vals[2])
-    b2 = b0 * np.tanh(b_star_vals[1]) * np.cos(b_star_vals[2])
-    
-    b_vals = [b0, b1, b2]
-    
-    if isinstance(b_star, pd.Series):
-        # stringr::str_remove_all equivalent
-        names = [str(name).replace("_star", "") for name in b_star.index]
-        return pd.Series(b_vals, index=names)
-    else:
-        return np.array(b_vals)
+    """Unconstrained (b0_star, b1_star, b2_star) to constrained (b0, b1, b2)."""
+    b0 = np.exp(b_star[0])
+    b1 = b0 * np.tanh(b_star[1]) * np.sin(b_star[2])
+    b2 = b0 * np.tanh(b_star[1]) * np.cos(b_star[2])
 
+    return np.array([b0, b1, b2])
 
 def seasonalModel_params_to_zeta_jacobian(b_star):
-    """
-    Jacobian from unconstrained to constraint parameters
-    """
-    b_star_vals = b_star.values if isinstance(b_star, pd.Series) else b_star
-    
+    """Jacobian from unconstrained (z0, z1, z2) to constraint (b0, b1, b2)."""
     # Extract the coefficients
-    b0_star = b_star_vals[0]
-    b1_star = b_star_vals[1]
-    b2_star = b_star_vals[2]
+    b0_star = b_star[0]
+    b1_star = b_star[1]
+    b2_star = b_star[2]
     
-    # Initialize 3x3 matrix
+    # Initialize
     J = np.zeros((3, 3))
     
     # Derivatives of b0 wrt b0, b1, b2
-    J[0, 0] = np.exp(b0_star)                                  # d_b0_d_b0 = b0
-    J[0, 1] = 0                                                # d_b0_d_b1
-    J[0, 2] = 0                                                # d_b0_d_b2
-    
+    J[1,1] = np.exp(b0_star)
+    J[1,2] = 0
+    J[1,3] = 0
+
     # Derivatives of b1 wrt b0, b1, b2
-    J[1, 0] = J[0, 0] * np.tanh(b1_star) * np.sin(b2_star)     # d_b1_d_b0 = b1
-    J[1, 1] = J[0, 0] * (1 - np.tanh(b1_star)**2) * np.sin(b2_star) # d_b1_d_b1
-    J[1, 2] = J[0, 0] * np.tanh(b1_star) * np.cos(b2_star)     # d_b1_d_b2 = b2
-    
+    J[2,1] = J[1,1] * np.tanh(b1_star) * np.sin(b2_star)
+    J[2,2] = J[1,1] * (1 - np.tanh(b1_star)**2) * np.sin(b2_star)
+    J[2,3] = J[1,1] * np.tanh(b1_star) * np.cos(b2_star)
+
     # Derivatives of b2 wrt b0, b1, b2
-    J[2, 0] = J[1, 2]                                          # d_b2_d_b0 = b2
-    J[2, 1] = J[0, 0] * (1 - np.tanh(b1_star)**2) * np.cos(b2_star) # d_b2_d_b1
-    J[2, 2] = -J[1, 0]                                         # d_b2_d_b2 = -b1
-    
-    colnames = ["d_b0_star", "d_b1_star", "d_b2_star"]
-    rownames = ["b0", "b1", "b2"]
-    
-    return pd.DataFrame(J, index=rownames, columns=colnames)
+    J[3,1] = J[2,3]
+    J[3,2] = J[1,1] * (1 - np.tanh(b1_star)**2) * np.cos(b2_star)
+    J[3,3] = -J[2,1]
+
+    J_df = pd.DataFrame(
+        J, 
+        columns=['d_b0_star', 'd_b1_star', 'd_b2_star'],
+        index=['b0', 'b1', 'b2']
+    )
+
+    return J_df
 
 class SeasonalModel:
-    """
-    Seasonal Model class
-    
-    The `SeasonalModel` class implements a seasonal regression model as a linear combination of sine and cosine functions.
-    This model is designed to capture periodic effects in time series data, particularly for applications involving seasonal trends.
-    
-    Version 1.0.1
-    """
 
-    def __init__(self, order=1, period=365):
+    def __init__(self, orders = 1, periods = 365):
         """
-        Initialize a `SeasonalModel` object.
-        :param order: int or list, number of combinations of sines and cosines.
-        :param period: int or list, seasonality period. The default is 365.
+        Initializes the SeasonalModel
         """
-        # Ensure order and period are lists for the iteration logic in fit
-        self.__period = [period] if np.isscalar(period) else list(period)
-        self.__order = [order] if np.isscalar(order) else list(order)
-        
+
+        self.version = "1.0.1"
         self.extra_params = {}
         
-        # Private fields equivalent
-        self.__version = "1.0.1"
-        self.__model = None
-        self.__dmodel = None
-        self._mformula = None
-        self._dformula = None
-        self.__std_errors = pd.Series(dtype=float)
-        self._external_regressors = []
+        # Standardize inputs to lists to support multiple seasonalities
+        self._periods = periods if isinstance(periods, list) else [periods]
+        self._orders = orders if isinstance(orders, list) else [orders]
         
-        # Mutable parameters for prediction (since statsmodels Results are immutable)
-        self.__model_params = pd.Series(dtype=float)
-        self.__dmodel_params = pd.Series(dtype=float)
-        self.__coef_names = []
-        self.__dcoef_names = []
+        # State attributes (Initialized as None, populated during .fit() )
+        self._model = None       # Will hold the statsmodels object
+        self._dcoefs = None      # Will hold the derivative coefficients
+        self._std_errors = None  # Will hold the standard errors
+        self.external_regressors = [] # Will hold the external regressors
 
-    def fit(self, formula, data, **kwargs):
-        """
-        Fit a seasonal model as a linear combination of sine and cosine functions and
-        eventual external regressors specified in the formula.
-        """
-        if not hasattr(formula, "coef_names"):
-            formula = FormulaString(str(formula), coef_names=[])
-        
-        base_formula = formula
-        base_formula_dt = formula
+    def fit(self, data, target_col, time_col="n", external_regressors=[], include_intercept=True):
+        """Fit the seasonal model."""
 
-        ## Handle string inputs gracefully by wrapping them in the custom FormulaString (from previous script)
-        #if not hasattr(base_formula, 'coef_names'):
-        #    from types import SimpleNamespace
-        #    base_formula = SimpleNamespace(coef_names=[], value=str(formula))
-        #    # Mocking the string conversion for simplicity if FormulaString isn't imported
-        #    setattr(base_formula, '__str__', lambda self: self.value)
-        #    
-        #if not hasattr(base_formula_dt, 'coef_names'):
-        #    from types import SimpleNamespace
-        #    base_formula_dt = SimpleNamespace(coef_names=[], value=str(formula))
-        #    setattr(base_formula_dt, '__str__', lambda self: self.value)
+        # Store the external regressors
+        self.external_regressors = external_regressors
 
-        # Loop through periods and orders to build formulas
-        if len(self.__order) == 1:
-            for p in self.__period:
-                for o in self.__order:
-                    for i in range(1, o + 1):
-                        base_formula = seasonalModel_formula(base_formula, order=i, period=p)
-                        base_formula_dt = seasonalModel_formula_dt(base_formula_dt, order=i, period=p)
-        elif len(self.__order) == len(self.__period):
-            for j in range(len(self.__period)):
-                p = self.__period[j]
-                for i in range(1, self.__order[j] + 1):
-                    base_formula = seasonalModel_formula(base_formula, order=i, period=p)
-                    base_formula_dt = seasonalModel_formula_dt(base_formula_dt, order=i, period=p)
+        # 1. Initialize our matrices with the base regressors
+        X = data[self.external_regressors + [time_col]].copy()
+        y = data[target_col]
 
-        self._mformula = str(base_formula)
-        self._dformula = str(base_formula_dt)
+        # Add seasonal featuress
+        X = add_seasonal_features(X, time_col=time_col, orders=self._orders, periods=self._periods)
+
+        # Drop the raw time column because it's not a regressor itself
+        X = X.drop(columns=[time_col])
         
-        # Fit seasonal model
-        self.__model = smf.ols(self._mformula, data=data, **kwargs).fit()
-        self.__dmodel = smf.ols(self._dformula, data=data, **kwargs).fit()
+        # 4. Fit the main model
+        if include_intercept:
+            X = sm.add_constant(X)
+
+        self._model = sm.OLS(y, X).fit()
+
+        self._std_errors = self._model.bse.copy() # Save the standard errors to use in update()
         
-        # Store coefficients locally to allow updating
-        self.__model_params = self.__model.params.copy()
-        dcoefs = self.__dmodel.params.copy()
+        # 5. Create the derivative coefficients (No second fit)
+        self.dcoefs = self._model.params.copy()
         
-        # Map differential coefficients (Sin to -Sin, Intercept to 0)
-        sin_mask = dcoefs.index.str.contains("sin")
-        dcoefs.loc[sin_mask] = -dcoefs.loc[sin_mask]
+        if 'const' in self.dcoefs:
+            self.dcoefs['const'] = 0.0
         
-        int_mask = dcoefs.index.str.contains("Intercept")
-        if int_mask.any():
-            dcoefs.loc[int_mask] = 0
+        # Negates cos coefficients because of the derivative of cos(x) = -sin(x)
+        # Different from R because R code used derivatives expressions 
+        # and not the names of the coefficients
+        cos_cols = [col for col in self.dcoefs.index if 'cos' in col]
+        self.dcoefs[cos_cols] *= -1
+        
+        return self
+
+    def predict(self, data, time_col="n"):
+        """Predict method for the class `seasonalModel`."""
+
+        # Handle missing data (Return training predictions)
+        if data is None:
+            return self._model.fittedvalues
+
+        # Extract base columns needed for feature engineering
+        self._training_data = data[self.external_regressors + [time_col]].copy()
+
+        X = self._training_data.copy()
+        # Add seasonal features
+        X = add_seasonal_features(X, time_col=time_col, orders=self._orders, periods=self._periods)
+
+        # Drop the raw time column because it's not a regressor itself
+        X = X.drop(columns=[time_col])
+
+        # Make sure the model includes the intercept
+        if 'const' in self._model.params.index and 'const' not in X.columns:
+            X = sm.add_constant(X, has_constant='add')
+        
+        # Select the columns that are in the model
+        X = X[self._model.params.index]
+
+        # Generate the predictions
+        return self._model.predict(X)
+
+    def differential(self, data=None, time_col="n"):
+        """Compute the differential of the sinusoidal function."""
+
+        # Handle missing data (Return training differential)
+        if data is None:
+            data = self._training_data  # saved during fit()
             
-        self.__dmodel_params = dcoefs
+        # Extract base columns needed for feature engineering
+        X = data[self.external_regressors + [time_col]].copy()
+        
+        # Add seasonal features
+        X = add_seasonal_features_dt(X, time_col=time_col, orders=self._orders, periods=self._periods)
+        
+        # Drop the raw time column because it's not a regressor itself
+        X = X.drop(columns=[time_col])
 
-        # Detect regressors from statsmodels exog_names
-        exog_names = self.__model.model.exog_names
+        # Make sure the model includes the intercept
+        if 'const' in self._model.params.index and 'const' not in X.columns:
+            X = sm.add_constant(X, has_constant='add')
         
-        idx_seasonal = [i for i, x in enumerate(exog_names) if "sin" in x or "cos" in x]
-        idx_external = [i for i, x in enumerate(exog_names) if "sin" not in x and "cos" not in x and "Intercept" not in x]
+        # Select the columns that are in the model
+        X = X[self._model.params.index]
         
-        self._external_regressors = [exog_names[i] for i in idx_external]
-        
-        n_seasonal_reg = len(idx_seasonal)
-        n_external_regressors = len(idx_external)
-        
-        # Map standard coefficient names
-        coefs_names = exog_names.copy()
-        seasonal_names = getattr(base_formula, "coef_names", [])
-        
-        for k, idx in enumerate(idx_seasonal):
-            if k < len(seasonal_names):
-                coefs_names[idx] = seasonal_names[k]
-                
-        if len(exog_names) - n_seasonal_reg - n_external_regressors == 1:
-            int_idx = exog_names.index("Intercept") if "Intercept" in exog_names else 0
-            coefs_names[int_idx] = "Intercept"
-            
-        self.__coef_names = coefs_names
-
-        # Build equivalent "standard names" for the differential model too.
-        d_exog_names = self.__dmodel.model.exog_names
-        d_idx_seasonal = [i for i, x in enumerate(d_exog_names) if "np.sin" in x or "np.cos" in x]
-        d_coefs_names = d_exog_names.copy()
-        for k, idx in enumerate(d_idx_seasonal):
-            if k < len(seasonal_names):
-                d_coefs_names[idx] = seasonal_names[k]
-        if "Intercept" in d_exog_names:
-            d_coefs_names[d_exog_names.index("Intercept")] = "Intercept"
-        self.__dcoef_names = d_coefs_names
-        
-        # Extract Standard Errors
-        self.__std_errors = self.__model.bse.copy()
-        self.__std_errors.index = self.__coef_names
-
-    def predict(self, n=None, newdata=None):
-        """
-        Predict method for the class `seasonalModel`.
-        """
-        if newdata is None:
-            if n is None:
-                # Predict on training data
-                X_exog = self.__model.model.exog
-                return pd.Series(np.dot(X_exog, self.__model_params.values))
-            else:
-                n_val = n if isinstance(n, (list, tuple, np.ndarray, pd.Series)) else [n]
-                newdata = pd.DataFrame({'n': n_val})
-                
-        # Use patsy to recreate the exact design matrix format from newdata
-        X_df = build_design_matrices([self.__model.model.data.design_info], newdata, return_type='dataframe')[0]
-        
-        # Dot product with updated parameters
-        return X_df.dot(self.__model_params)
-
-    def differential(self, n=None, newdata=None):
-        """
-        Compute the differential of the sinusoidal function.
-        """
-        if newdata is None:
-            if n is None:
-                # Predict on training data
-                X_exog = self.__dmodel.model.exog
-                return pd.Series(np.dot(X_exog, self.__dmodel_params.values))
-            else:
-                n_val = n if isinstance(n, (list, tuple, np.ndarray, pd.Series)) else [n]
-                newdata = pd.DataFrame({'n': n_val})
-                
-        # Build design matrix for differential model
-        X_df = build_design_matrices([self.__dmodel.model.data.design_info], newdata, return_type='dataframe')[0]
-        return X_df.dot(self.__dmodel_params)
+        # Generate the differential
+        return X.dot(self.dcoefs)
 
     def update(self, coefficients):
-        """
-        Update the model's parameters.
-        :param coefficients: dict or pd.Series, new parameters.
-        """
-        new_coefs = self.coefficients.copy()
-        names_old = new_coefs.index.tolist()
-        
-        coef_series = coefficients if isinstance(coefficients, pd.Series) else pd.Series(coefficients)
-        names_new = coef_series.index.tolist()
-        
-        if len(names_new) != len(names_old):
-            warnings.warn("In seasonalModel$update(): The length of new `coefficients` do not match the length of the old coefficients.")
-            
-        # Update values safely matching the R logic
-        for i, name in enumerate(names_new):
-            if name in names_old:
-                new_coefs[name] = coef_series.iloc[i]
-                self.__std_errors[name] = np.nan
-                
-        # Remap standard names back to statsmodels exog_names for matrix operations
-        mapped_params = pd.Series(new_coefs.values, index=self.__model.model.exog_names)
-        self.__model_params = mapped_params
-        
-        # Update coefficients of the differential, aligned to differential design matrix columns
-        # Map by the stored "standard names" for the differential model.
-        d_vals = new_coefs.reindex(self.__dcoef_names).values
-        dcoefs = pd.Series(d_vals, index=self.__dmodel.model.exog_names)
+        """Update model coefficients by name."""
+        # 1. Warn if lengths differ
+        if len(coefficients) != len(self._model.params):
+            warnings.warn("In seasonalModel.update(): The length of new coefficients does not match the length of the old coefficients.")
 
-        # Apply sign/intercept adjustments matching fit()
-        sin_mask = dcoefs.index.str.contains("np.sin", regex=False)
-        dcoefs.loc[sin_mask] = -dcoefs.loc[sin_mask]
+        # 2. Update only coefficients that exist, invalidate their std errors
+        for name, value in coefficients.items():
+            if name in self._model.params.index:
+                self._model.params[name] = value
+                self._std_errors[name] = np.nan
 
-        if "Intercept" in dcoefs.index:
-            dcoefs.loc["Intercept"] = 0
-
-        self.__dmodel_params = dcoefs
-
+        # 3. Recompute derivative coefficients from updated params
+        self.dcoefs = self._model.params.copy()
+        if 'const' in self.dcoefs:
+            self.dcoefs['const'] = 0.0
+        cos_cols = [col for col in self.dcoefs.index if 'cos' in col]
+        self.dcoefs[cos_cols] *= -1
+        return self
+    
     def update_std_errors(self, std_errors):
-        """
-        Update the parameter's std. errors.
-        """
-        new_std_errors = self.std_errors.copy()
-        names_old = new_std_errors.index.tolist()
+        """Update standard errors of the model parameters."""
         
-        err_series = std_errors if isinstance(std_errors, pd.Series) else pd.Series(std_errors)
-        names_new = err_series.index.tolist()
-        
-        if len(names_new) != len(names_old):
-            warnings.warn("In seasonalModel$update_std.errors(): The length of new `std.errors` do not match the length of the old std. errors!")
-            
-        for i, name in enumerate(names_new):
-            if name in names_old:
-                new_std_errors[name] = err_series.iloc[i]
-                
-        self.__std_errors = new_std_errors
+        # 1. Safety check for lengths
+        if len(std_errors) != len(self._std_errors):
+            warnings.warn(
+                "In SeasonalModel.update_std_errors(): The length of `std_errors` "
+                "does not match the length of the old standard errors."
+            )
+
+        # 2. Safe update (only overwrite keys that already exist in the model)
+        for name, value in std_errors.items():
+            if name in self._std_errors.index:
+                self._std_errors[name] = value
+
+        return self
 
     def __str__(self):
-        """Print method for the class."""
-        msg = "----------------------- seasonalModel ----------------------- \n"
-        msg += f" - Order: {self.order}\n - Period: {self.period}\n"
-        
-        if not self._external_regressors:
-            msg += "- External regressors: 0 \n"
+        """Print method for the class `seasonalModel`."""
+        msg = f"----------------------- seasonalModel -----------------------\n"
+        msg += f" - Order: {self._orders}\n"
+        msg += f" - Period: {self._periods}\n"
+        if len(self.external_regressors) == 0:
+            msg += f" - External regressors: 0\n"
         else:
-            n_ext = len(self._external_regressors)
-            ext_names = ", ".join(self._external_regressors)
-            msg += f"- External regressors: {n_ext} ({ext_names})\n"
-            
-        msg += f"- Version: {self.__version}\n"
-        msg += "--------------------------------------------------------------\n"
-        if self.__model is not None:
-            msg += str(self.__model.summary().tables[1]) # Only print coef table to mimic R print
-        #params = self.__model.params
-        #msg = f"{params.iloc[0]:.4f}, {params.iloc[1]:.4f}, {params.iloc[2]:.4f}, {params.iloc[3]:.4f}"
+            msg += f" - External regressors: {len(self.external_regressors)} ({self.external_regressors})\n"
+        msg += f" - Version: {self.version}\n"
+        msg += f"--------------------------------------------------------------\n"
+        msg += str(self._model.summary2(float_format="%.2f").tables[1])
         return msg
-        
+
     def __repr__(self):
         return self.__str__()
 
-    # Active bindings / Properties
-    
     @property
     def coefficients(self):
-        """Named vector, fitted coefficients (using standard names)."""
-        coefs = self.__model_params.copy()
-        coefs.index = self.__coef_names
-        return coefs
+        """Named Series of fitted coefficients."""
+        # Because we saved this as a Pandas Series during fit(), 
+        # it natively contains both the names (index) and the values.
+        return self._model.params
 
     @property
     def model(self):
-        """A slot with the fitted object."""
-        return self.__model
+        """A slot with the fitted statsmodels object."""
+        return self._model 
 
     @property
-    def period(self):
-        """Integer scalar, periodicity of the seasonality."""
-        return self.__period[0] if len(self.__period) == 1 else self.__period
+    def periods(self):
+        """List of periodicities of the seasonality."""
+        return self._periods
 
     @property
-    def order(self):
-        """Integer scalar, number of combinations of sines and cosines."""
-        return self.__order[0] if len(self.__order) == 1 else self.__order
+    def orders(self):
+        """List of the number of combinations of sines and cosines."""
+        return self._orders
 
     @property
     def omega(self):
-        """Integer, periodicity."""
-        p = np.array(self.__period)
-        return 2 * np.pi / p
+        """List of calculated angular frequencies."""
+        # Since we upgraded to support multiple periods, 
+        # this uses a list comprehension to calculate omega for all of them.
+        return [2 * np.pi / p for p in self._periods]
 
     @property
-    def std_errors(self): # snake_case to match Python conventions
-        """Named vector, with the parameters' std. errors."""
-        return self.__std_errors
+    def std_errors(self):
+        """Series with the parameters' standard errors."""
+        return self._std_errors
 
     @property
     def tidy(self):
-        """A dataframe with estimated parameters and std. errors."""
+        """A DataFrame with estimated parameters and standard errors."""
         return pd.DataFrame({
-            'term': self.coefficients.index,
-            'estimate': self.coefficients.values,
-            'std.error': self.__std_errors.values
+            "term": self._model.params.index,
+            "estimate": self._model.params.values,
+            "std.error": self._std_errors.values
         })
