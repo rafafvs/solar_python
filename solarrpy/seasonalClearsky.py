@@ -346,5 +346,10 @@ class SeasonalClearsky(SeasonalModel):
         return self._control
 
     @property
+    def std_errors(self):
+        """Series with the parameters' standard errors."""
+        return self._std_errors
+
+    @property
     def ssf(self):
         return self._ssf

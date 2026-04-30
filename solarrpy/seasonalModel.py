@@ -135,7 +135,7 @@ class SeasonalModel:
 
         # Drop the raw time column because it's not a regressor itself
         X = X.drop(columns=[time_col])
-        
+
         # 4. Fit the main model
         if include_intercept:
             X = sm.add_constant(X)
