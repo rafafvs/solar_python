@@ -79,6 +79,7 @@ def clearsky_outliers(x, Ct, date, threshold=0.0001, quiet=False):
     """
     # Initialize a dataset
     data = pd.DataFrame({'Ct': Ct, 'x': x})
+    
     # Eventually add a date for non-stationary data
     if date is not None:
         data['date'] = pd.to_datetime(date)
@@ -88,7 +89,7 @@ def clearsky_outliers(x, Ct, date, threshold=0.0001, quiet=False):
     # Detect problems and violations
     outliers_na = data.index[data['x'].isna()].tolist()
     outliers_lo = data.index[data['x'] <= 0].tolist()
-    outliers_hi = data.index[data['x'] >= max(data['Ct'])].tolist()
+    outliers_hi = data.index[data['x'] >= data['Ct']].tolist()
     
     # Complete outliers index
     idx_outliers = list(set(outliers_na + outliers_lo + outliers_hi))
