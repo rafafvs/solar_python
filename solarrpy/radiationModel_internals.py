@@ -1,3 +1,11 @@
+import warnings
+import numpy as np
+import pandas as pd
+from scipy.integrate import quad
+
+from .zzz import number_of_day
+from .seasonalModel import SeasonalModel
+
 """
 Solar model helper functions — Python translation.
 
@@ -11,380 +19,214 @@ Functions:
 Version: 1.0.0
 """
 
-from __future__ import annotations
+def shift(arr, n):
+    arr_shifted = np.empty_like(arr, dtype=float)
+    if n == 0:
+        arr_shifted[:] = arr
+    if n > 0:
+        arr_shifted[:n] = np.nan
+        arr_shifted[n:] = arr[:-n]
+    else:
+        arr_shifted[n:] = np.nan
+        arr_shifted[:n] = arr[-n:]
+    return arr_shifted
 
-import math
-import numpy as np
-import pandas as pd
-from scipy import integrate as sci_integrate
-
-
-# ---------------------------------------------------------------------------
-# number_of_day  (helper used throughout — mirrors R's number_of_day)
-# ---------------------------------------------------------------------------
-
-def number_of_day(date) -> int:
-    """Return the day-of-year (1–365/366) for a date or date-like string."""
-    return pd.Timestamp(date).day_of_year
-
-
-# ---------------------------------------------------------------------------
-# create_monthly_sequence
-# ---------------------------------------------------------------------------
-
-def create_monthly_sequence(
-    t_now,
-    t_hor,
-    last_day: bool = False,
-) -> pd.DataFrame:
-    """
-    Build a monthly date grid between ``t_now`` and ``t_hor``.
-
-    Each row covers one calendar month (or partial month at the boundaries).
-    The grid is used to integrate piecewise-constant monthly parameters over
-    the horizon [t_now, t_hor].
-
-    Parameters
-    ----------
-    t_now    : date-like, start date
-    t_hor    : date-like, horizon (end) date
-    last_day : bool
-        When True, the last row is split into two rows: one covering
-        [t_{T-1}, T-1] (shared variance) and one for the final day
-        [T-1, T] (conditional variance).
-
-    Returns
-    -------
-    pd.DataFrame with columns:
-        Year   — calendar year of the sub-interval start
-        Month  — calendar month of the sub-interval end
-        n      — start day index (days since t_now, with seasonal offset)
-        N      — end   day index
-        tau    — total time to maturity (days from t_now to t_hor)
-
-    The ``last_day`` flag is stored as ``df.attrs["last_day"]``.
-
-    Examples
-    --------
-    >>> create_monthly_sequence("2022-01-01", "2022-03-24")
-    >>> create_monthly_sequence("2022-01-01", "2022-03-24", last_day=True)
-    """
+def create_monthly_sequence(t_now, t_hor, last_day=False):
     t_now = pd.Timestamp(t_now)
     t_hor = pd.Timestamp(t_hor)
 
-    # First day of the start and end months
+    # First day of the month for t_now and t_hor
     t_start = t_now.replace(day=1)
     t_end   = t_hor.replace(day=1)
 
-    # Monthly sequence of first-of-month dates
-    month_starts = pd.date_range(t_start, t_end, freq="MS")
-    n_months = len(month_starts)
+    # Monthly sequence of first-of-month dates — mirrors seq.Date(..., by="1 month")
+    months = pd.date_range(t_start, t_end, freq="MS")
+    
+    # dates_now: t_now, then last day of previous month for each subsequent first-of-month
+    dates_now = [t_now] + [m - pd.Timedelta(days=m.day) for m in months[1:]]
+    
+    # dates_hor: last day of each month for all-but-last, then t_hor
+    dates_hor = [m + pd.offsets.MonthEnd(0) for m in months[:-1]] + [t_hor]
 
-    # dates_now: start of each sub-interval
-    #   first entry = t_now itself;
-    #   subsequent = last day of each month  (first-of-month minus its own day)
-    dates_now = [t_now] + [
-        m - pd.Timedelta(days=m.day)          # last day of previous month
-        for m in month_starts[1:]
-    ]
+    # Number of days in each sub-interval — mirrors difftime(dates_hor, dates_now)
+    n_of_day = np.array([(h - s).days for s, h in zip(dates_now, dates_hor)], dtype=float)
 
-    # dates_hor: end of each sub-interval
-    #   all-but-last = last day of that month;
-    #   last entry = t_hor itself
-    dates_hor = [
-        m + pd.offsets.MonthEnd(0)            # last day of the month
-        for m in month_starts[:-1]
-    ] + [t_hor]
-
-    # Number of days in each sub-interval
-    n_of_day = np.array([
-        (h - s).days
-        for s, h in zip(dates_now, dates_hor)
-    ], dtype=float)
-
-    # Build the base DataFrame
+    # Build base dataframe — Year from dates_now, Month from dates_hor
     df = pd.DataFrame({
         "Year":  [d.year  for d in dates_now],
         "Month": [d.month for d in dates_hor],
         "n":     n_of_day,
     })
+    
+    df["N"] = df["n"] + number_of_day(t_now) + np.concatenate([[0], np.cumsum(n_of_day[1:])])
 
-    # Cumulative day indices (N = end day index measured from the seasonal origin)
-    start_doy = number_of_day(t_now)               # day-of-year of t_now
-    cumulative_lag = np.concatenate([[0], np.cumsum(n_of_day[:-1])])
-    df["N"] = df["n"] + start_doy + cumulative_lag
-    df["n"] = df["N"] - df["n"]                    # n = start index of sub-interval
+    # n = N - n  (start index of each sub-interval)
+    df["n"] = df["N"] - df["n"]
 
-    # Time-to-maturity (total days from t_now to t_hor, measured from n[0])
-    total_tau = (t_hor - t_now).days
-    df["tau"] = total_tau + df["n"].iloc[0]
+    # tau = total days t_now→t_hor + n[0]  (constant column)
+    df["tau"] = (t_hor - t_now).days + df["n"].iloc[0]
 
     # Optional last-day split
     if last_day:
         last_row = df.iloc[[-1]].copy()
-        last_row["n"] = last_row["tau"] - 1        # penultimate day → last sub-interval
-
-        # Trim the end of the second-to-last row by 1 day
-        df.iloc[-1, df.columns.get_loc("N")] = df.iloc[-1]["N"] - 1
-
+        last_row["n"] = last_row["tau"] - 1          # mirrors mutate(n = tau - 1)
+        df.iloc[-1, df.columns.get_loc("N")] -= 1    # trim last row's N by 1
         df = pd.concat([df, last_row], ignore_index=True)
 
     df.attrs["last_day"] = last_day
-    return df
-
+    return df[['Year', 'Month', 'n', 'N', 'tau']]
 
 # ---------------------------------------------------------------------------
 # martingale_method_seasonal
 # ---------------------------------------------------------------------------
-
-def martingale_method_seasonal(
-    Yt: pd.Series | np.ndarray,
-    Yt_bar: pd.Series | np.ndarray,
-    e_mu: float | pd.Series | np.ndarray = 0.0,
-) -> float:
+def martingale_method_seasonal(Yt, Yt_bar, e_mu = 0):
     """
-    Estimate the mean-reversion parameter θ via the martingale method.
-
-    The estimator is:
-        a_n = Σ w_t · dY_t / Σ w_t · dY_{t-1}
-        θ   = −log(a_n)
-
-    where the instrument w_t = (Ȳ_{t-1} − Y_{t-1}) / σ̄²_{t-1}
-    and σ̄²_t is estimated from the quadratic variation of Y_t.
-
-    Parameters
-    ----------
-    Yt     : array-like, transformed solar radiation time series
-    Yt_bar : array-like, seasonal mean of Y_t
-    e_mu   : float or array-like, expected drift (default 0)
-
-    Returns
-    -------
-    float, estimated θ
+    Martingale estimation for mean-reversion parameter theta.
+    Uses SeasonalModel to fit a time-varying variance to the squared differences.
     """
-    Yt     = np.asarray(Yt,     dtype=float)
-    Yt_bar = np.asarray(Yt_bar, dtype=float)
-    e_mu   = np.broadcast_to(np.asarray(e_mu, dtype=float), Yt.shape).copy()
-
-    # Quadratic variation: (Y_{t-1} - Y_{t-2})²
-    dYt2 = (np.roll(Yt, 1) - np.roll(Yt, 2)) ** 2
-    dYt2[:2] = np.nan
-
-    # Fit a simple seasonal model (constant mean) to the quadratic variation
-    # Mirrors seasonalModel$new()$fit("dYt2 ~ 1", …) — intercept-only model
-    n = np.arange(len(Yt))
-    valid = ~np.isnan(dYt2)
-    sigma2_bar = np.full(len(Yt), np.nanmean(dYt2))   # constant seasonal variance
-
-    # Instrument
-    Yt_bar_L1 = np.roll(Yt_bar, 1)
-    Yt_L1     = np.roll(Yt,     1)
-    Y_est_L1  = (Yt_bar_L1 - Yt_L1) / sigma2_bar
-
-    # Differences from seasonal mean
-    dYt    = Yt - Yt_bar
-    dYt_L1 = np.roll(Yt, 1) - np.roll(Yt_bar, 1) - np.roll(e_mu, 1)
-
-    # Build DataFrame and drop NaN rows (mirrors na.omit)
+    Yt = np.asarray(Yt)
+    Yt_bar = np.asarray(Yt_bar)
+    
+    if np.isscalar(e_mu):
+        e_mu = np.full_like(Yt, e_mu)
+    else:
+        e_mu = np.asarray(e_mu)
+        
+    n = len(Yt)
+    
+    # Quadratic variation (dYt2)
+    # Equivalent to (lag(Yt, 1) - lag(Yt, 2))^2
+    dYt2 = (shift(Yt, 1) - shift(Yt, 2)) ** 2
+    
+    # Construct a DataFrame to feed into SeasonalModel
+    data_df = pd.DataFrame({
+        'dYt2': dYt2,
+        'n': np.arange(1, n + 1)
+    })
+    
+    # Drop NaNs for the fit
+    fit_df = data_df.dropna(subset=['dYt2']).copy()
+    
+    # Initialize and fit the seasonal variance model
+    seasonal_variance = SeasonalModel()
+    seasonal_variance.fit(
+        data=fit_df, 
+        target_col='dYt2', 
+        time_col='n', 
+        include_intercept=True
+    )
+    
+    pred_df = pd.DataFrame({'n': np.arange(n)})
+    sigma2_bar = seasonal_variance.predict(data=pred_df, time_col='n')
+    
+    # Martingale estimation components
+    # lag(Yt_bar, 1) - lag(Yt, 1)
+    Y_est_L1 = (shift(Yt_bar, 1) - shift(Yt, 1)) / sigma2_bar.values
+    dYt = Yt - Yt_bar
+    dYt_L1 = shift(Yt, 1) - shift(Yt_bar, 1) - shift(e_mu, 1)
+    
     df = pd.DataFrame({
         "Y_est_L1": Y_est_L1,
         "dYt":      dYt,
         "dYt_L1":   dYt_L1,
-    })
-    df = df.dropna()
-
-    a_n = (df["Y_est_L1"] * df["dYt"]).sum() / (df["Y_est_L1"] * df["dYt_L1"]).sum()
-    return float(-math.log(a_n))
-
+    }).dropna()
+    
+    # Create mask to drop NaNs
+    a_n = np.sum(df["Y_est_L1"] * df["dYt"]) / np.sum(df["Y_est_L1"] * df["dYt_L1"])
+    
+    return -np.log(a_n)
 
 # ---------------------------------------------------------------------------
 # reparam_seasonal_function
 # ---------------------------------------------------------------------------
-
-def reparam_seasonal_function(
-    par: np.ndarray | dict,
-    theta: float,
-    omega: float = 2 * math.pi / 365,
-) -> dict:
+def reparam_seasonal_function(par, theta, omega=2 * np.pi / 365):
     """
-    Reparametrise the OLS seasonal variance coefficients (a0, a1, a2) to
-    continuous-time parameters (c0, c1, c2) and their integral counterparts
-    (γ0, γ1, γ2), for both the short-term and long-term formulations.
-
-    The seasonal variance function is:
-        σ̄²(t) = a0 + a1·sin(ω·t) + a2·cos(ω·t)
-
-    Parameters
-    ----------
-    par   : array-like of length 3, [a0, a1, a2]
-    theta : float, mean-reversion parameter
-    omega : float, angular frequency (default 2π/365)
-
-    Returns
-    -------
-    dict with keys:
-        alpha, beta, detM           — transformation intermediates
-        a_    — original [a0, a1, a2]
-        c_    — short-term [c0, c1, c2]
-        c_long— long-term  [c0, c1, c2]
-        gamma — short-term integral parameters [γ0, γ1, γ2]
-        gamma_long — long-term integral parameters
+    Reparametrization for seasonal variance. Maps OLS parameters to continuous-time parameters.
     """
-    if hasattr(par, "values"):
-        par = par.values
-    par = np.asarray(par, dtype=float).ravel()
     a0, a1, a2 = par[0], par[1], par[2]
-
-    # ---- Long-term (steady-state) reparametrisation ----
+    
+    # Correction for long term variance
     c0_long = a0 * 2 * theta
     c1_long = a1 * 2 * theta - omega * a2
     c2_long = a2 * 2 * theta + omega * a1
-
-    gamma0_long =  c0_long / (2 * theta)
+    
+    gamma0_long = c0_long / (2 * theta)
     gamma1_long = (c1_long * 2 * theta + c2_long * omega) / (4 * theta**2 + omega**2)
     gamma2_long = (c2_long * 2 * theta - c1_long * omega) / (4 * theta**2 + omega**2)
 
-    # ---- Short-term reparametrisation ----
-    alpha = 1 - math.exp(-2 * theta) * math.cos(omega)
-    beta  =     math.exp(-2 * theta) * math.sin(omega)
-    detM  = alpha**2 + beta**2
-
-    c0 = (2 * theta * a0) / (1 - math.exp(-2 * theta))
-    c1 = ((2 * theta * alpha + omega * beta) * a1 + (2 * theta * beta  - omega * alpha) * a2) / detM
-    c2 = ((omega * alpha - 2 * theta * beta) * a1 + (omega * beta  + 2 * theta * alpha) * a2) / detM
-
-    gamma0 =  c0 / (2 * theta)
+    # Correction for short term variance
+    alpha = 1 - np.exp(-2 * theta) * np.cos(omega)
+    beta = np.exp(-2 * theta) * np.sin(omega)
+    detM = alpha**2 + beta**2
+    
+    c0 = (2 * theta * a0) / (1 - np.exp(-2 * theta))
+    c1 = ((2 * theta * alpha + omega * beta) * a1 + (2 * theta * beta - omega * alpha) * a2) / detM
+    c2 = ((omega * alpha - 2 * theta * beta) * a1 + (omega * beta + 2 * theta * alpha) * a2) / detM
+    
+    gamma0 = c0 / (2 * theta)
     gamma1 = (c1 * 2 * theta + c2 * omega) / (4 * theta**2 + omega**2)
     gamma2 = (c2 * 2 * theta - c1 * omega) / (4 * theta**2 + omega**2)
-
+    
     return {
-        "alpha":      alpha,
-        "beta":       beta,
-        "detM":       detM,
-        "a_":         pd.Series({"a0": a0, "a1": a1, "a2": a2}),
-        "c_":         pd.Series({"c0": c0, "c1": c1, "c2": c2}),
-        "c_long":     pd.Series({"c0": c0_long, "c1": c1_long, "c2": c2_long}),
-        "gamma":      pd.Series({"gamma0": gamma0, "gamma1": gamma1, "gamma2": gamma2}),
-        "gamma_long": pd.Series({"gamma0": gamma0_long, "gamma1": gamma1_long, "gamma2": gamma2_long}),
+        "alpha": alpha,
+        "beta": beta,
+        "detM": detM,
+        "a_": np.array([a0, a1, a2]),
+        "c_": np.array([c0, c1, c2]),
+        "c_long": np.array([c0_long, c1_long, c2_long]),
+        "gamma": np.array([gamma0, gamma1, gamma2]),
+        "gamma_long": np.array([gamma0_long, gamma1_long, gamma2_long])
     }
-
 
 # ---------------------------------------------------------------------------
 # integral_sigma_numeric
 # ---------------------------------------------------------------------------
-
-def integral_sigma_numeric(
-    theta: float,
-    par: np.ndarray | pd.Series,
-    omega: float = 2 * math.pi / 365,
-):
+def integral_sigma_numeric(theta, par, omega=2 * np.pi / 365):
     """
-    Return a callable that numerically integrates
-        ∫_t^s √(σ̄(τ) · e^{−2θ(T−τ)}) dτ
-
-    where σ̄(τ) = par[0] + par[1]·sin(ω·τ) + par[2]·cos(ω·τ).
-
-    Parameters
-    ----------
-    theta : float, mean-reversion parameter
-    par   : array-like of length 3, [c0, c1, c2]
-    omega : float
-
-    Returns
-    -------
-    callable f(t, s, T_) → np.ndarray
-        t, s, T_ are array-like of equal length (or scalars).
-        Returns the integral value for each (t_i, s_i, T_i) triple.
-
-    Examples
-    --------
-    >>> fn = integral_sigma_numeric(0.1, [0.5, 0.1, 0.05])
-    >>> fn([0], [30], [30])
+    Returns a function that computes the numerical integral for the square root of sigma_s * exp(-theta).
     """
-    if hasattr(par, "values"):
-        par = par.values
-    par = np.asarray(par, dtype=float).ravel()
-
-    def seasonal_function(t: float) -> float:
-        return par[0] + par[1] * math.sin(omega * t) + par[2] * math.cos(omega * t)
-
-    def integrand(tau: float, T_: float) -> float:
-        return math.sqrt(max(seasonal_function(tau) * math.exp(-2 * theta * (T_ - tau)), 0.0))
-
-    def fn(
-        t:  np.ndarray | list | float,
-        s:  np.ndarray | list | float,
-        T_: np.ndarray | list | float,
-    ) -> np.ndarray:
-        t  = np.atleast_1d(np.asarray(t,  dtype=float))
-        s  = np.atleast_1d(np.asarray(s,  dtype=float))
-        T_ = np.atleast_1d(np.asarray(T_, dtype=float))
-        result = np.empty(len(T_))
+    c0, c1, c2 = par[0], par[1], par[2]
+    
+    def seasonal_function(tau):
+        return c0 + c1 * np.sin(omega * tau) + c2 * np.cos(omega * tau)
+        
+    def integrand(tau, T_val):
+        val = seasonal_function(tau) * np.exp(-2 * theta * (T_val - tau))
+        # Protect against negative values inside the sqrt due to numerical drift
+        return np.sqrt(np.maximum(val, 0))
+        
+    def integrator(t, s, T_):
+        t = np.atleast_1d(t)
+        s = np.atleast_1d(s)
+        T_ = np.atleast_1d(T_)
+        
+        result = np.zeros(len(T_))
         for i in range(len(T_)):
-            val, _ = sci_integrate.quad(integrand, t[i], s[i], args=(T_[i],))
-            result[i] = val
+            res, _ = quad(integrand, t[i], s[i], args=(T_[i],))
+            result[i] = res
         return result
-
-    return fn
-
+        
+    return integrator
 
 # ---------------------------------------------------------------------------
 # integral_sigma2_formula
 # ---------------------------------------------------------------------------
-
-def integral_sigma2_formula(
-    theta: float,
-    par: np.ndarray | pd.Series,
-    omega: float = 2 * math.pi / 365,
-):
+def integral_sigma2_formula(theta, par, omega=2 * np.pi / 365):
     """
-    Return a callable that computes the closed-form integral
-        ∫_t^s σ̄²(τ) · e^{−2θ(T−τ)} dτ
-
-    using the formula:
-        result = par[0]·f0(t,s,T) + par[1]·f1(t,s,T) + par[2]·f2(t,s,T)
-
-    where:
-        f0(t,s,T) = e^{−2θ(T−s)} − e^{−2θ(T−t)}
-        f1(t,s,T) = e^{−2θ(T−s)}·sin(ω·s) − e^{−2θ(T−t)}·sin(ω·t)
-        f2(t,s,T) = e^{−2θ(T−s)}·cos(ω·s) − e^{−2θ(T−t)}·cos(ω·t)
-
-    Parameters
-    ----------
-    theta : float, mean-reversion parameter
-    par   : array-like of length 3, [γ0, γ1, γ2]
-    omega : float
-
-    Returns
-    -------
-    callable f(t, s, T_) → np.ndarray
-        All arguments may be scalars or array-like of equal length.
-
-    Examples
-    --------
-    >>> fn = integral_sigma2_formula(0.1, [0.5, 0.1, 0.05])
-    >>> fn([0], [30], [30])
+    Returns a vectorized function computing the exact formula integral for sigma_s^2 * exp(-2theta).
     """
-    if hasattr(par, "values"):
-        par = par.values
-    par = np.asarray(par, dtype=float).ravel()
+    g0, g1, g2 = par[0], par[1], par[2]
+    
+    def f0(t, s, T_):
+        return np.exp(-2 * theta * (T_ - s)) - np.exp(-2 * theta * (T_ - t))
+        
+    def f1(t, s, T_):
+        return np.exp(-2 * theta * (T_ - s)) * np.sin(omega * s) - np.exp(-2 * theta * (T_ - t)) * np.sin(omega * t)
+        
+    def f2(t, s, T_):
+        return np.exp(-2 * theta * (T_ - s)) * np.cos(omega * s) - np.exp(-2 * theta * (T_ - t)) * np.cos(omega * t)
 
-    def fn(
-        t:  np.ndarray | list | float,
-        s:  np.ndarray | list | float,
-        T_: np.ndarray | list | float,
-    ) -> np.ndarray:
-        t  = np.asarray(t,  dtype=float)
-        s  = np.asarray(s,  dtype=float)
-        T_ = np.asarray(T_, dtype=float)
-
-        exp_s = np.exp(-2 * theta * (T_ - s))
-        exp_t = np.exp(-2 * theta * (T_ - t))
-
-        f0 = exp_s - exp_t
-        f1 = exp_s * np.sin(omega * s) - exp_t * np.sin(omega * t)
-        f2 = exp_s * np.cos(omega * s) - exp_t * np.cos(omega * t)
-
-        return par[0] * f0 + par[1] * f1 + par[2] * f2
-
-    return fn
+    def integrator(t, s, T_):
+        return g0 * f0(t, s, T_) + g1 * f1(t, s, T_) + g2 * f2(t, s, T_)
+        
+    return integrator
