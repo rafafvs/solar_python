@@ -78,19 +78,19 @@ def seasonalModel_params_to_zeta_jacobian(b_star):
     J = np.zeros((3, 3))
     
     # Derivatives of b0 wrt b0, b1, b2
-    J[1,1] = np.exp(b0_star)
-    J[1,2] = 0
-    J[1,3] = 0
+    J[0,0] = np.exp(b0_star)
+    J[0,1] = 0
+    J[0,2] = 0
 
     # Derivatives of b1 wrt b0, b1, b2
-    J[2,1] = J[1,1] * np.tanh(b1_star) * np.sin(b2_star)
-    J[2,2] = J[1,1] * (1 - np.tanh(b1_star)**2) * np.sin(b2_star)
-    J[2,3] = J[1,1] * np.tanh(b1_star) * np.cos(b2_star)
+    J[1,0] = J[0,0] * np.tanh(b1_star) * np.sin(b2_star)
+    J[1,1] = J[0,0] * (1 - np.tanh(b1_star)**2) * np.sin(b2_star)
+    J[1,2] = J[0,0] * np.tanh(b1_star) * np.cos(b2_star)
 
     # Derivatives of b2 wrt b0, b1, b2
-    J[3,1] = J[2,3]
-    J[3,2] = J[1,1] * (1 - np.tanh(b1_star)**2) * np.cos(b2_star)
-    J[3,3] = -J[2,1]
+    J[2,0] = J[1,2]
+    J[2,1] = J[0,0] * (1 - np.tanh(b1_star)**2) * np.cos(b2_star)
+    J[2,2] = -J[1,0]
 
     J_df = pd.DataFrame(
         J, 
@@ -223,12 +223,15 @@ class SeasonalModel:
                 self._model.params[name] = value
                 self._std_errors[name] = np.nan
 
+        self._model._cache['bse'] = self._std_errors.values.copy()
+
         # 3. Recompute derivative coefficients from updated params
         self.dcoefs = self._model.params.copy()
         if 'const' in self.dcoefs:
             self.dcoefs['const'] = 0.0
         cos_cols = [col for col in self.dcoefs.index if 'cos' in col]
         self.dcoefs[cos_cols] *= -1
+        
         return self
     
     def update_std_errors(self, std_errors):
@@ -245,6 +248,8 @@ class SeasonalModel:
         for name, value in std_errors.items():
             if name in self._std_errors.index:
                 self._std_errors[name] = value
+
+        self._model._cache['bse'] = self._std_errors.values.copy()
 
         return self
 

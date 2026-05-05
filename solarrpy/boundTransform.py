@@ -24,7 +24,6 @@ class BoundTransform:
             
         self._link = link
         
-        # We use numpy for vectorized operations over pandas Series or numpy arrays
         if link == "invgumbel":
             self._g = lambda x: np.log(-np.log(x))
             self._ig = lambda x: np.exp(-np.exp(x))
@@ -80,15 +79,14 @@ class BoundTransform:
     def g_prime(self, X_prime):
         return self._g_prime(X_prime)
 
-    def fit(self, Xt, epsilon=0.01, min_pos=1, max_pos=1):
+    def fit(self, Xt, epsilon=0.001):
         """Fit the best parameters alpha and beta from a given time series."""
+        # x = 1 - Rt / Ct
         x = np.asarray(Xt)
         
-        sorted_x = np.sort(x)
-        
-        xmin_val = sorted_x[min_pos - 1]
-        xmax_val = sorted_x[-max_pos]
-        
+        xmin_val = np.min(x) 
+        xmax_val = np.max(x)
+
         self.epsilon = xmin_val * epsilon
         self._alpha = xmin_val - self.epsilon
         self._beta = (xmax_val - xmin_val) + 2 * self.epsilon
