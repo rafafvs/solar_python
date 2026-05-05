@@ -10,7 +10,7 @@ class SeasonalSolarFunctions:
             raise ValueError("Method must be 'spencer' or 'cooper'")
         
         self.version = '1.0.0'
-        self._Gsc = 1367,
+        self._Gsc = 1367
         self.method_ = method
         self.legal_hour = legal_hour
 
@@ -76,14 +76,6 @@ class SeasonalSolarFunctions:
             date_h = x
 
         # Solar hour for the selected day-time
-        return date_h + pd.to_timedelta(4 * (lon - lon_st), unit='m') + self.E(date_h)
-
-    def solar_time(self, x, lon, lon_st=15, tz="Europe/Rome"):
-        """Compute the solar time from a clock time."""
-        date_h = pd.to_datetime(x)
-        date_h = date_h.tz_localize(tz) if date_h.tz is None else date_h.tz_convert(tz)
-            
-        # Timezone longitudinal shift + Equation of Time
         return date_h + pd.to_timedelta(4 * (lon - lon_st), unit='m') + self.E(date_h)
 
     def solar_hour(self, LST):
@@ -270,7 +262,7 @@ class SeasonalSolarFunctions:
             
         day_date = pd.to_datetime(x).date()
         start_date = pd.to_datetime(f"{day_date} 00:00:00").tz_localize(tz)
-        end_date = pd.to_datetime(f"{day_date + pd.Timedelta(days=1)(days=1)} 00:00:00").tz_localize(tz)
+        end_date = start_date + pd.Timedelta(days=1) # Simplified and corrected
         
         # Format pandas freq from R's `1 min` to `1min` string equivalent
         freq = str(by).replace(" ", "")

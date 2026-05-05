@@ -32,7 +32,7 @@ def clearsky_delta_optimizer(x, Ct, lower=0, upper=3, by=0.01, ntol=0):
     # Grid of candidate delta values
     grid = np.arange(lower, upper + by, by)
     
-    # Loss
+    # Loss function: count the number of violations where delta * Ct < GHI
     losses = np.array([np.sum(delta * Ct - x < 0) for delta in grid])
     
     # Return the first delta where violations <= ntol
@@ -209,7 +209,7 @@ class SeasonalClearsky(SeasonalModel):
         data['n'] = number_of_day(data["date"])
         data['Rt'] = np.asarray(x)
         if H0 is None:
-            data["H0"] = self._ssf.Hon(data["n"].values, self.lat, alt=alt)
+            data["H0"] = self._ssf.Hon(data["n"].values, self.lat)
         else:
             data["H0"] = H0
         data["clearsky"] = np.asarray(clearsky)
@@ -227,7 +227,6 @@ class SeasonalClearsky(SeasonalModel):
         if include_trend:
             ext_regressors.append("t")
 
-        
         super().fit(
             data       = data,
             target_col = "clearsky",
@@ -237,7 +236,7 @@ class SeasonalClearsky(SeasonalModel):
         )
         # Initial fit average clear sky
         data["Ct_hat"] = self.predict(newdata=data)
-        
+
         # --- Handle selection of columns ---
         # Avoid KeyError if "t" is not in data (when include_trend is False)
         selected_columns = ["n", "H0", "Rt", "Ct_hat"]
@@ -258,9 +257,13 @@ class SeasonalClearsky(SeasonalModel):
         self.coefficients_orig = self._model.params.copy()
         self.delta = delta_val * control['delta0']
 
+        # Store original standard errors because super().update() overwrites them
+        std_errors = self._std_errors.copy()
+
         # Update coefficients and std errors
         super().update(self.coefficients_orig * self.delta)
-        super().update_std_errors(self._std_errors * self.delta)
+        super().update_std_errors(std_errors * self.delta)
+
 
         return self
 
