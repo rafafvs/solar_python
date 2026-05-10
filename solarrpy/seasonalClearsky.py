@@ -68,6 +68,7 @@ def clearsky_optimizer(seasonal_model_Ct, data, ntol=0):
 
     # Update model with optimal parameters
     sm.update(dict(zip(sm.model.params.index, opt.x)))
+    
     return sm
 
 def clearsky_outliers(x, Ct, date, threshold=0.0001, quiet=False):
@@ -178,93 +179,125 @@ class SeasonalClearsky(SeasonalModel):
         self.delta = None
         self._ssf = None
         self._control = control
+
+    def fit(self, x, date, lat, clearsky, H0=None, alt=None,
+        optimiser="delta_optimiser"):
+        """
+        Fit the seasonal model for clearsky radiation (GHI ~ H0 + ...).
     
-    def fit(self, x, date, lat, clearsky, H0=None, alt=None):
-        """Fit the seasonal model for clearsky radiation (GHI ~ H0 + ...)."""
-        # Self arguments
+        Parameters
+        ----------
+        optimiser : {"delta_optimiser", "constrained"}
+            "delta_optimiser" : grid-search for a scalar delta that scales
+                the OLS-fitted coefficients to form an upper envelope (fast,
+                interpretable, assumes correct model shape).
+            "constrained" : refit all model parameters via constrained /
+                penalized optimization to enforce GHI <= pred directly
+                (more flexible, slower, no post-hoc coefficient scaling).
+        """
+        _VALID_OPTIMISERS = {"delta_optimiser", "constrained"}
+        if optimiser not in _VALID_OPTIMISERS:
+            raise ValueError(
+                f"`optimiser` must be one of {_VALID_OPTIMISERS}, got '{optimiser}'."
+            )
+    
         control = self._control
-        
-        # Control parameters
         include_intercept = control["include_intercept"]
-        include_trend = control["include_trend"]
-        order_H0 = control["order_H0"]
-        
-        # Ensure clearsky is specified
+        include_trend     = control["include_trend"]
+        order_H0          = control["order_H0"]
+    
         if clearsky is None:
             raise ValueError("`clearsky` time series must be specified.")
-
-        # Add the function to compute extraterrestrial radiation
+    
         self._ssf = SeasonalSolarFunctions(method='spencer')
-        
-        # Store reference latitude (handle scalar or array-like)
-        self.lat = float(np.atleast_1d(lat)[0])        
-        
-        # Initialize the dataset
+        self.lat  = float(np.atleast_1d(lat)[0])
+    
+        # ------------------------------------------------------------------ #
+        # Build dataset
+        # ------------------------------------------------------------------ #
         date_series = pd.to_datetime(date)
         data = pd.DataFrame({'date': date_series})
-        data['Year'] = data['date'].dt.year
+        data['Year']  = data['date'].dt.year
         data['Month'] = data['date'].dt.month
-        data['Day'] = data['date'].dt.day
-        data['t'] = data['Year'] - data['Year'].max()
-        data['n'] = number_of_day(data["date"])
-        data['Rt'] = np.asarray(x)
+        data['Day']   = data['date'].dt.day
+        data['t']     = data['Year'] - data['Year'].max()
+        data['n']     = number_of_day(data["date"])
+        data['Rt']    = np.asarray(x)
+        data['GHI']   = np.asarray(x)   # alias used by clearsky_optimizer
+    
         if H0 is None:
             data["H0"] = self._ssf.Hon(data["n"].values, self.lat)
         else:
             data["H0"] = H0
+    
         data["clearsky"] = np.asarray(clearsky)
-
-        ## Method: Estimate with Extraterrestrial and clear sky radiation
-        # ========================================================================
-        # 1. Daily maximum clearsky: Ct_max ~ a_0 + a_1 H0 + a_2 cos(.) + a_3 sin(.) + a_4 cos(2*.) + a_5 sin(2*.) + ...
-        # ========================================================================
-        # Add higher-order H0 polynomial columns
+    
+        # ------------------------------------------------------------------ #
+        # Step 1 — OLS fit: clearsky ~ H0 + harmonics (shared by both paths)
+        # ------------------------------------------------------------------ #
         for i in range(2, order_H0 + 1):
             data[f"H0_{i}"] = data["H0"] ** i
-            
-        # Identify external regressors passed to the parent fit
+    
         ext_regressors = ["H0"] + [f"H0_{i}" for i in range(2, order_H0 + 1)]
         if include_trend:
             ext_regressors.append("t")
-
+    
         super().fit(
-            data       = data,
-            target_col = "clearsky",
-            time_col   = "n",
+            data                = data,
+            target_col          = "clearsky",
+            time_col            = "n",
             external_regressors = ext_regressors,
-            include_intercept = include_intercept
+            include_intercept   = include_intercept
         )
-        # Initial fit average clear sky
+    
         data["Ct_hat"] = self.predict(newdata=data)
-
-        # --- Handle selection of columns ---
-        # Avoid KeyError if "t" is not in data (when include_trend is False)
-        selected_columns = ["n", "H0", "Rt", "Ct_hat"]
-        if include_trend:
-            selected_columns.insert(1, "t")
-        data = data[selected_columns]
-
-        # Optimize the fit using clearsky_delta_optimizer (user must ensure it is imported)
-        delta_val = clearsky_delta_optimizer(
-            data['Rt'], data['Ct_hat'] * control['delta0'], 
-            control['lower'], control['upper'], control['by'], control['ntol']
-        )
-        
-        if delta_val is None:
-            raise ValueError("Optimization failed to find a valid delta.")
-
-        # Store original coefficients and delta parameter
-        self.coefficients_orig = self._model.params.copy()
-        self.delta = delta_val * control['delta0']
-
-        # Store original standard errors because super().update() overwrites them
-        std_errors = self._std_errors.copy()
-
-        # Update coefficients and std errors
-        super().update(self.coefficients_orig * self.delta)
-        super().update_std_errors(std_errors * self.delta)
-
-
+    
+        # ------------------------------------------------------------------ #
+        # Step 2 — Optimisation (path diverges here)
+        # ------------------------------------------------------------------ #
+        if optimiser == "delta_optimiser":
+            # --- Trim dataset to only what's needed downstream ---
+            selected_columns = ["n", "H0", "Rt", "Ct_hat"]
+            if include_trend:
+                selected_columns.insert(1, "t")
+            data = data[selected_columns]
+    
+            delta_val = clearsky_delta_optimizer(
+                data['Rt'],
+                data['Ct_hat'] * control['delta0'],
+                control['lower'],
+                control['upper'],
+                control['by'],
+                control['ntol']
+            )
+            if delta_val is None:
+                raise ValueError(
+                    "delta_optimiser failed to find a valid delta. "
+                    "Consider widening [lower, upper] or increasing ntol."
+                )
+    
+            self.coefficients_orig = self._model.params.copy()
+            self.delta = delta_val * control['delta0']
+    
+            std_errors = self._std_errors.copy()
+            super().update(self.coefficients_orig * self.delta)
+            super().update_std_errors(std_errors * self.delta)
+    
+        elif optimiser == "constrained":
+            # --- Refit all parameters; no scalar delta scaling needed ---
+            refitted_model = clearsky_optimizer(
+                seasonal_model_Ct = self,
+                data              = data,          # must contain 'GHI' column
+                ntol              = control['ntol']
+            )
+            # Propagate refitted parameters back into self
+            new_params = refitted_model._model.params
+            super().update(dict(zip(new_params.index, new_params.values)))
+    
+            # delta is not meaningful here but set to 1 for API consistency
+            self.coefficients_orig = self._model.params.copy()
+            self.delta = 1.0
+    
         return self
 
     def predict(self, n=None, newdata=None, alt=None):
