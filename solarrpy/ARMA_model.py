@@ -12,152 +12,7 @@ import warnings
 import numpy as np
 import pandas as pd
 from statsmodels.tsa.arima.model import ARIMA
-
-
-# ---------------------------------------------------------------------------
-# Helper functions  (replace with your own implementations if needed)
-# ---------------------------------------------------------------------------
-
-def ARMA_vector_b(ar_order: int, ma_order: int) -> np.ndarray:
-    """
-    Unit selection vector of length (ar_order + ma_order).
-    Marks the position where the innovation enters the state vector.
-    Returns an empty array when both orders are 0, or when there is no
-    MA component (ma_order == 0).
-    """
-    size = ar_order + ma_order
-    b = np.zeros(size)
-    # The residual enters only if there is an MA part
-    if ma_order > 0 and ar_order < size:
-        b[ar_order] = 1.0
-    return b
-
-
-def ARMA_companion_matrix(phi: np.ndarray, theta: np.ndarray) -> np.ndarray:
-    """
-    Build the companion / state-transition matrix A for the ARMA model.
-
-    State vector layout: [y_{t-1}, ..., y_{t-p}, eps_{t-1}, ..., eps_{t-q}]
-    """
-    p = len(phi)
-    q = len(theta)
-    n = p + q
-    if n == 0:
-        return np.empty((0, 0))
-
-    A = np.zeros((n, n))
-
-    # AR block (top-left p×p companion)
-    if p > 0:
-        A[0, :p] = phi
-        if p > 1:
-            A[1:p, :p - 1] = np.eye(p - 1)
-
-    # MA block (top rows, columns p : p+q)
-    if q > 0:
-        A[0, p : p + q] = theta
-        if q > 1:
-            A[p + 1 : p + q, p : p + q - 1] = np.eye(q - 1)
-
-    return A
-
-
-def ARMA_filter(
-    x: np.ndarray,
-    A: np.ndarray,
-    b: np.ndarray,
-    intercept: float,
-) -> dict[str, np.ndarray]:
-    """
-    Recursive state-space filter.
-    Returns dict with keys 'fitted' (one-step predictions) and 'residuals'.
-    """
-    T = len(x)
-    n = len(b)
-    state = np.zeros(n)
-    fitted = np.zeros(T)
-    residuals = np.zeros(T)
-
-    for t in range(T):
-        y_hat = float(A[0] @ state) + intercept if n > 0 else intercept
-        eps = x[t] - y_hat
-        fitted[t] = y_hat
-        residuals[t] = eps
-        if n > 0:
-            state = A @ state + b * eps
-
-    return {"fitted": fitted, "residuals": residuals}
-
-
-def ARMA_next_step(
-    n_ahead: int,
-    x: np.ndarray,
-    A: np.ndarray,
-    b: np.ndarray,
-    intercept: float,
-    eps: float = 0.0,
-) -> np.ndarray:
-    """
-    Forecast n_ahead steps given current state vector x.
-    eps is the most recent realised residual (used for step 1 only).
-    """
-    n = len(b)
-    if n == 0:
-        return np.full(n_ahead, intercept)
-
-    state = x.copy().astype(float)
-    forecasts = np.zeros(n_ahead)
-
-    for h in range(n_ahead):
-        current_eps = eps if h == 0 else 0.0
-        state = A @ state + b * current_eps
-        forecasts[h] = float(A[0] @ state) + intercept
-
-    return forecasts
-
-
-def ARMA_expectation(
-    h: int,
-    X0: np.ndarray,
-    A: np.ndarray,
-    b: np.ndarray,
-    intercept: float,
-) -> np.ndarray:
-    """h-step-ahead expected values starting from state X0."""
-    n = len(b)
-    if n == 0:
-        return np.full(h, intercept)
-
-    expectations = np.zeros(h)
-    A_power = np.eye(n)
-
-    for step in range(h):
-        A_power = A_power @ A
-        expectations[step] = float(A[0] @ A_power @ X0) + intercept
-
-    return expectations
-
-
-def ARMA_variance(
-    h: int,
-    A: np.ndarray,
-    b: np.ndarray,
-    sigma2: float,
-) -> np.ndarray:
-    """h-step-ahead forecast variances via the VMA representation."""
-    n = len(b)
-    if n == 0:
-        return np.full(h, sigma2 ** 2)
-
-    variances = np.zeros(h)
-    psi = b.copy().astype(float)
-
-    for step in range(h):
-        variances[step] = (sigma2 ** 2) * float(psi @ psi)
-        psi = A @ psi
-
-    return variances
-
+from .ARMA_model_internals import arma_expectation, arma_variance, arma_next_step, arma_filter, arma_companion_matrix, arma_vector_b
 
 # ---------------------------------------------------------------------------
 # ARMAModel
@@ -194,139 +49,105 @@ class ARMAModel:
     # Constructor
     # ------------------------------------------------------------------
 
-    def __init__(
-        self,
-        ar_order: int = 1,
-        ma_order: int = 1,
-        include_intercept: bool = False,
-    ) -> None:
+    def __init__(self, ar_order: int = 1, ma_order: int = 1, include_intercept: bool = False,) -> None:
         self._include_intercept = include_intercept
         self._ar_order = ar_order
         self._ma_order = ma_order
-        self._b = ARMA_vector_b(ar_order, ma_order)
+        self._b = arma_vector_b(ar_order, ma_order)
 
         # Placeholders populated by fit()
         self._model = None
-        self._intercept = pd.Series({"intercept": 0.0})
+        self._intercept = 0.0
         self._phi = pd.Series(dtype=float)
         self._theta = pd.Series(dtype=float)
-        self._A = ARMA_companion_matrix(np.array([]), np.array([]))
-        self._sigma2: float = 1.0
-        self._std_errors: pd.Series | None = None
+        self._A = arma_companion_matrix(np.array([]), np.array([]))
+        self._sigma2 = 1.0
+        self._std_errors = None
+
+        self._coefficients = None
 
     # ------------------------------------------------------------------
     # Public methods
     # ------------------------------------------------------------------
 
-    def fit(self, x: np.ndarray) -> None:
+    def fit(self, x: np.ndarray):
         """
-        Fit the model using ``statsmodels.tsa.arima.ARIMA``.
-
-        Mirrors R's ``arima(x, order=c(p,0,q), include.mean=..., method='CSS')``.
-
-        Parameters
-        ----------
-        x : array-like
-            Time series.
+        Fit the ARMA model. Wraps statsmodels ARIMA to mimic R's stats::arima.
         """
-        x = np.asarray(x, dtype=float)
-        trend = "c" if self._include_intercept else "n"
+        # statsmodels uses order=(p, d, q) and trend='c' for intercept, 'n' for none.
+        trend = 'c' if self._include_intercept else 'n'
+        
+        # To strictly mimic R's arima(..., method="CSS"), we might need conditional likelihood, 
+        # but statsmodels defaults to exact state-space MLE which is generally superior.
+        sm_model = ARIMA(x, order=(self._ar_order, 0, self._ma_order), trend=trend)
+        sm_results = sm_model.fit()
+        self._model = sm_results
+        
+        # Extract parameters and standard errors
+        params = sm_results.params
+        std_errors = sm_results.bse
+        
+        # Parse Intercept
+        if self._include_intercept:
+            # statsmodels typically names this 'const'
+            intercept_key = 'const' if 'const' in params.index else params.index[0]
+            self._intercept = params[intercept_key]
+            self._coefficients['intercept'] = self._intercept
+            self._std_errors['intercept'] = std_errors[intercept_key]
+        else:
+            self._intercept = 0.0
 
-        result = ARIMA(
-            x,
-            order=(self._ar_order, 0, self._ma_order),
-            trend=trend,
-        ).fit(method="innovations_mle")
+        # Parse AR coefficients
+        phi_list, phi_se_list = [], []
+        if self._ar_order > 0:
+            ar_keys = [k for k in params.index if 'ar.' in k]
+            for i, k in enumerate(ar_keys, 1):
+                val = params[k]
+                se = std_errors[k]
+                name = f"phi_{i}"
+                phi_list.append(val)
+                self._coefficients[name] = val
+                self._std_errors[name] = se
+        self._phi = np.array(phi_list)
 
-        # statsmodels returns plain numpy arrays; use param_names for lookup
-        param_names: list[str] = result.param_names
-        params: np.ndarray = result.params
-        bse: np.ndarray = result.bse
+        # Parse MA coefficients
+        theta_list, theta_se_list = [], []
+        if self._ma_order > 0:
+            ma_keys = [k for k in params.index if 'ma.' in k]
+            for i, k in enumerate(ma_keys, 1):
+                val = params[k]
+                se = std_errors[k]
+                name = f"theta_{i}"
+                theta_list.append(val)
+                self._coefficients[name] = val
+                self._std_errors[name] = se
+        self._theta = np.array(theta_list)
 
-        # ---- intercept --------------------------------------------------
-        intercept_val = 0.0
-        intercept_se = np.nan
-        ic_idx = [i for i, n in enumerate(param_names) if n in ("const", "intercept")]
-        if self._include_intercept and ic_idx:
-            idx = ic_idx[0]
-            intercept_val = float(params[idx])
-            intercept_se = float(bse[idx])
-        self._intercept = pd.Series({"intercept": intercept_val})
-
-        # ---- AR coefficients -------------------------------------------
-        ar_idx = [i for i, n in enumerate(param_names) if n.startswith("ar.")]
-        phi_names = [f"phi_{i+1}" for i in range(len(ar_idx))]
-        self._phi = pd.Series(params[ar_idx], index=phi_names)
-        phi_se = pd.Series(bse[ar_idx], index=phi_names)
-
-        # ---- MA coefficients -------------------------------------------
-        ma_idx = [i for i, n in enumerate(param_names) if n.startswith("ma.")]
-        theta_names = [f"theta_{i+1}" for i in range(len(ma_idx))]
-        self._theta = pd.Series(params[ma_idx], index=theta_names)
-        theta_se = pd.Series(bse[ma_idx], index=theta_names)
-
-        # ---- store -------------------------------------------------------
-        self._model = result
-        self._A = ARMA_companion_matrix(self._phi.values, self._theta.values)
-
-        # R's sigma2 field stores the std dev (sqrt of variance)
-        sigma2_idx = param_names.index("sigma2")
-        self._sigma2 = float(np.sqrt(params[sigma2_idx]))
-
-        self._std_errors = pd.concat([
-            pd.Series({"intercept": intercept_se}),
-            phi_se,
-            theta_se,
-        ])
+        # Update Companion Matrix and Variance
+        self._a_matrix = arma_companion_matrix(self._phi, self._theta)
+        self._sigma2 = sm_results.sigma2
 
     def filter(self, x: np.ndarray) -> dict[str, np.ndarray]:
         """
         Filter the time series, returning fitted values and residuals.
-
-        Parameters
-        ----------
-        x : array-like
-
-        Returns
-        -------
-        dict with keys ``'fitted'`` and ``'residuals'``.
         """
-        return ARMA_filter(np.asarray(x), self.A, self.b, self.intercept_value)
+        return arma_filter(np.asarray(x), self._A, self._b, self._intercept)
 
-    def next_step(
-        self,
-        x: np.ndarray,
-        n_ahead: int = 1,
-        eps: float = 0.0,
-    ) -> np.ndarray:
+    def next_step(self, x: np.ndarray, n_ahead: int = 1, eps: float = 0.0) -> np.ndarray:
         """
-        Forecast ``n_ahead`` steps from the current state vector.
-
-        Parameters
-        ----------
-        x : array-like
-            State vector of length ``p + q``.
-        n_ahead : int
-        eps : float
-            Most recent realised residual (used at step 1 only).
+        Forecast `n_ahead` steps from the current state vector.
         """
-        return ARMA_next_step(
-            n_ahead, np.asarray(x), self.A, self.b, self.intercept_value, eps
+        return arma_next_step(
+            n_ahead, np.asarray(x), self._A, self._b, self._intercept, eps
         )
 
     def expectation(self, h: int = 1, X0: np.ndarray | None = None) -> np.ndarray:
         """
-        h-step-ahead expected value.
-
-        Parameters
-        ----------
-        h : int
-        X0 : array-like, optional
-            Initial state of length ``p + q``. Defaults to zeros.
+        `h`-step-ahead expected value.
         """
         if X0 is None:
             X0 = np.zeros(sum(self.order.values()))
-        return ARMA_expectation(h, np.asarray(X0), self.A, self.b, self.intercept_value)
+        return arma_expectation(h, np.asarray(X0), self._A, self._b, self._intercept)
 
     def variance(self, h: int = 1, sigma2: float = 1.0) -> np.ndarray:
         """
@@ -338,49 +159,27 @@ class ARMAModel:
         sigma2 : float
             Residual std. deviation.
         """
-        return ARMA_variance(h, self.A, self.b, sigma2)
+        return arma_variance(h, self.A, self.b, sigma2)
 
-    def update(self, coefficients: pd.Series | None = None) -> None:
+    def update(self, coefficients) -> None:
         """
         Update model coefficients in-place.
-
-        Parameters
-        ----------
-        coefficients : pd.Series
-            Named series. Unrecognised names are silently ignored.
-            Matching the R behaviour, the std. errors for updated
-            parameters are set to NaN.
         """
         if coefficients is None:
             return
 
-        new_coefs = self.coefficients.copy()
-        old_names = set(new_coefs.index)
-
-        if len(coefficients) != len(new_coefs):
+        if len(coefficients) != len(self.coefficients):
             warnings.warn(
                 "ARMAModel.update(): length of new `coefficients` does not "
                 "match the current coefficients."
             )
 
         for name, val in coefficients.items():
-            if name in old_names:
-                new_coefs[name] = val
-                if self._std_errors is not None and name in self._std_errors.index:
-                    self._std_errors[name] = np.nan
-
-        if self._include_intercept:
-            self._intercept = pd.Series({"intercept": new_coefs["intercept"]})
-
-        if self._ar_order > 0:
-            phi_names = [n for n in new_coefs.index if re.search(r"phi", n)]
-            self._phi = new_coefs[phi_names]
-
-        if self._ma_order > 0:
-            theta_names = [n for n in new_coefs.index if re.search(r"theta", n)]
-            self._theta = new_coefs[theta_names]
-
-        self._A = ARMA_companion_matrix(self._phi.values, self._theta.values)
+            if name in self.coefficients.index:
+                self.coefficients[name] = val
+                self._std_errors[name] = np.nan
+        
+        self._A = arma_companion_matrix(self._phi.values, self._theta.values)
 
     def update_std_errors(self, std_errors: pd.Series | None = None) -> None:
         """
@@ -390,11 +189,7 @@ class ARMAModel:
         ----------
         std_errors : pd.Series
         """
-        if (
-            std_errors is None
-            or len(std_errors) == 0
-            or self._std_errors is None
-        ):
+        if (std_errors is None or len(std_errors) == 0 or self._std_errors is None):
             return
 
         if len(std_errors) != len(self._std_errors):
@@ -409,7 +204,7 @@ class ARMAModel:
         if sigma2 is not None:
             self._sigma2 = sigma2
 
-    def __repr__(self) -> str:
+    def __str__(self) -> str:
         GREEN = "\033[1;32m"
         RED   = "\033[1;31m"
         RESET = "\033[0m"
@@ -453,6 +248,9 @@ class ARMAModel:
             f"MA parameters     : {fmt_block(self._theta)}",
         ])
 
+    def __repr__(self) -> str:
+        return self.__str__()
+
     # ------------------------------------------------------------------
     # Properties  (read-only — mirror R active bindings)
     # ------------------------------------------------------------------
@@ -476,11 +274,6 @@ class ARMAModel:
     def order(self) -> dict[str, int]:
         """``{'AR': p, 'MA': q}``."""
         return {"AR": self._ar_order, "MA": self._ma_order}
-
-    @property
-    def intercept_value(self) -> float:
-        """Intercept as a plain float (0.0 when not included)."""
-        return float(self._intercept["intercept"])
 
     @property
     def intercept(self) -> pd.Series:
@@ -525,14 +318,9 @@ class ARMAModel:
     @property
     def tidy(self) -> pd.DataFrame:
         """DataFrame with columns: ``term``, ``estimate``, ``std_error``."""
-        coefs = self.coefficients
-        ses = (
-            self._std_errors.reindex(coefs.index)
-            if self._std_errors is not None
-            else pd.Series([np.nan] * len(coefs), index=coefs.index)
-        )
+
         return pd.DataFrame({
-            "term": coefs.index,
-            "estimate": coefs.values,
-            "std_error": ses.values,
+            "term": self.coefficients.index,
+            "estimate": self.coefficients.values,
+            "std_error": self._std_errors.values,
         })

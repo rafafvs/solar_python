@@ -325,10 +325,10 @@ def solar_model_forecast(
 
 
 # ---------------------------------------------------------------------------
-# solar_model_match_params
+# solarModel_match_params
 # ---------------------------------------------------------------------------
 
-def solar_model_match_params(
+def solarModel_match_params(
     vec_params: dict | pd.Series,
     params: dict,
 ) -> dict:

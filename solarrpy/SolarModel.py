@@ -1,966 +1,708 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from scipy.stats import norm
 import copy
-from solarrpy import solarMixture, sGARCH, solarMoments
 
+from .solarTransform import solarTransform
+from .seasonalClearsky import seasonalClearsky, clearsky_outliers
+from .seasonalModel import seasonalModel
+from .ARMA_model import armaModel
+from .sGARCH import sGARCH
+from .solarMixture import solarMixture
+from .zzz import number_of_day
+from .dsolarGHI import dsolarGHI
+from .solarModel_internals import solarModel_match_params
+from .solarMoments_internals import solarMoments_conditional, solarMoments_unconditional, solarMoments
+
+"""
+SolarModel Class
+
+The `SolarModel` class in Python implements a comprehensive workflow for modeling solar radiation data.
+It provides methods to fit seasonal models, detect and handle outliers, perform data transformation,
+and apply time-series models such as ARMA and GARCH for residual analysis. The class can use both
+seasonal and Gaussian Mixture Models (GMMs) to capture the distributional properties of the data.
+
+Overview:
+---------
+This class orchestrates the end-to-end fitting process for a solar radiation model:
+
+- **Seasonal Modeling:** Fits seasonal cycles to the input data, optionally on both clear-sky and actual GHI.
+- **Outlier Detection:** Identifies and treats outliers in the solar data using robust procedures.
+- **Transformation:** Transforms the data (e.g., via power/Box–Cox or log) for improved statistical properties.
+- **Time Series Modeling:** Fits ARMA models to the mean and GARCH models to the residual variance.
+- **Mixture Modeling:** Fits a Gaussian Mixture Model to capture non-Gaussian features in the standardized residuals.
+- **Likelihood Methods:** Computes (log-)likelihoods and related probability quantities.
+
+Usage Example:
+--------------
+```python
+# Model specification (typically via a SolarModelSpec object)
+spec = SolarModelSpec()
+spec.set_mean_model(arOrder=1, maOrder=1)
+spec.specification("Bologna")
+
+# Model initialization and fit
+model = SolarModel(spec)
+model.fit()
+
+# Accessing results
+summary = model.summary()
+loglikelihood = model.loglik
+fitted_data = model.data
+
+# Updating coefficients and filtering new data
+params = model.coefficients
+model.update(params)
+model.filter()
+
+# Fit a model with realized clear sky
+spec.control['stochastic_clearsky'] = True
+model = SolarModel(spec)
+model.fit()
+```
+
+Notes:
+------
+- The class is designed to be flexible and modular, supporting different fitting steps controlled by the specification.
+- It is versioned (see `self.version`).
+- Most core components are set up in the constructor and filled out during fitting.
+
+Version: 1.0.1
+"""
 
 class SolarModel:
-    """
-    Solar Model class for comprehensive solar radiation modeling.
-    
-    This class implements a complete solar model that includes fitting seasonal models,
-    detecting outliers, performing transformations, and applying time-series models
-    such as ARMA and GARCH.
-    
-    Example:
-    --------
-    # Model specification
-    spec = SolarModelSpec()
-    spec.set_mean_model(ar_order=1, ma_order=1)
-    spec.specification("Bologna")
-    
-    # Model fit
-    model = SolarModel(spec)
-    model.fit()
-    print(model)
-    """
-    
-    VERSION = "1.0.1"
-    
     def __init__(self, spec):
         """
-        Initialize a SolarModel.
-        
-        Parameters:
-        -----------
-        spec : SolarModelSpec
-            Specification object containing model setup
+        Initialize the SolarModel.
+        :param spec: A SolarModelSpec object.
         """
-        # Create seasonal data by month and day for a leap year (366 days)
-        dates = pd.date_range(start='2020-01-01', end='2020-12-31', freq='D')
-        seasonal_data = pd.DataFrame({
+        self.version = "1.0.1"
+        
+        # 1. Create seasonal skeleton (366 days to handle leap years)
+        dates = pd.date_range(start="2020-01-01", end="2020-12-31", freq='D')
+        self._seasonal_data = pd.DataFrame({
             'date': dates,
             'Month': dates.month,
             'Day': dates.day,
-            'n': self._number_of_day(dates)
-        })
-        seasonal_data = seasonal_data.drop('date', axis=1)
-        seasonal_data = seasonal_data.sort_values(['Month', 'Day'])
+            'n': number_of_day(dates) # 1-based day of year
+        }).drop(columns=['date']).sort_values(['Month', 'Day'])
+
+        # 2. Setup internal data
+        # spec.data is assumed to be a Pandas DataFrame from the previous translation
+        self._data = spec.data.copy()
+        if 'H0' in self._data.columns:
+            self._data = self._data.drop(columns=['H0'])
         
-        # Initialize private attributes
-        self._data = spec.data.drop('H0', axis=1, errors='ignore').copy()
         self._data['loglik'] = 0.0
-        self._seasonal_data = seasonal_data
         self._monthly_data = pd.DataFrame({
             'Month': range(1, 13),
             'Yt_tilde_uncond': 0.0,
             'sigma_uncond': 1.0
         })
+        
         self._loglik = None
         self._spec = copy.deepcopy(spec)
-        self._transform = SolarTransform(alpha=0, beta=1, link=self._spec.transform['link'])
-        self._seasonal_model_Ct = None
-        self._seasonal_model_Yt = None
-        self._ARMA = None
+        
+        # 3. Component placeholders
+        # These would be instances of the classes we translated previously
+        self._transform = solarTransform(alpha=0, beta=1, link=self._spec.transform['link'])
+        self._seasonal_model_ct = None
+        self._seasonal_model_yt = None
+        self._arma = None
         self._seasonal_variance = None
-        self._GARCH = None
-        self._NM_model = None
+        self._garch = None
+        self._nm_model = None
+        
         self._outliers = None
+        self._moments = {'conditional': None, 'unconditional': None}
+        self.interpolated = False
+
         self._hessian = None
         self._jacobian = None
-        self._moments = {'conditional': None, 'unconditional': None}
-        self._interpolated = False
-    
-    @staticmethod
-    def _number_of_day(dates):
-        """Calculate day of year for given dates."""
-        if isinstance(dates, pd.DatetimeIndex):
-            return dates.dayofyear
-        return pd.to_datetime(dates).dayofyear
-    
-    # ==================== Public Fitting Methods ====================
-    
+
+    # =================================================================
+    # The Fit Pipeline
+    # =================================================================
+
     def fit(self):
-        """
-        Initialize and fit a SolarModel object given the specification.
-        
-        This method sequentially fits all model components:
-        1. Clear sky seasonal model
-        2. Risk drivers
-        3. Solar transform
-        4. Seasonal mean
-        5. Monthly mean correction
-        6. ARMA model
-        7. Seasonal variance
-        8. GARCH variance
-        9. Mixture model
-        """
-        print("Fitting solar model...")
-        
-        # 1) Clear sky
-        self.fit_seasonal_model_Ct()
-        
-        # 2) Risk-driver
+        """Execute the full estimation pipeline."""
+        self.fit_seasonal_model_ct()
         self.compute_risk_drivers()
-        
-        # 3) Solar transform
         self.fit_transform()
-        
-        # 4) Seasonal mean
-        self.fit_seasonal_model_Yt()
-        
-        # Center the mean to be exactly equal to zero
+        self.fit_seasonal_model_yt()
         self.fit_monthly_mean()
-        
-        # 5) ARMA model
-        self.fit_ARMA()
-        
-        # 6) Seasonal variance
+        self.fit_arma()
         self.fit_seasonal_variance()
-        
-        # 7) GARCH variance
-        self.fit_GARCH()
-        
-        # 8) Mixture model
-        self.fit_NM_model()
-        self.update_NM_classification()
-        
-        # Update the moments
+        self.fit_garch()
+        self.fit_nm_model()
+        self.update_nm_classification()
         self.update_moments()
-        
-        # Update the log-likelihoods
         self.update_logLik()
-        
-        print("Model fitting complete!")
-    
-    def fit_seasonal_model_Ct(self):
-        """
-        Initialize and fit a seasonal clear sky model.
-        """
+
+    def fit_seasonal_model_ct(self):
+        """Fit clear sky model and predict Ct envelope."""
         control = self._spec.clearsky
-        data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)].copy()
+        # Train filter
+        train_mask = self._data['isTrain'] & (self._data['weights'] != 0)
+        train_data = self._data[train_mask]
         
-        # Initialize a seasonal model for clear sky radiation
-        seasonal_model_Ct = SeasonalClearsky(control=control)
-        
-        # Fit the seasonal model
-        seasonal_model_Ct.fit(
-            GHI=data[self._spec.target].values,
-            date=data['date'].values,
+        # Initialize and fit
+        sm_ct = seasonalClearsky(control=control)
+        sm_ct.fit(
+            x=train_data[self._spec.target],
+            date=train_data['date'],
             lat=self._spec.coords['lat'],
-            clearsky=data['clearsky'].values
+            clearsky=train_data['clearsky'],
+            method="constrained",
         )
         
-        # Add seasonal clear sky to data
-        self._data['Ct'] = seasonal_model_Ct.predict(self._data['n'].values)
-        
-        # Store the model
-        self._seasonal_model_Ct = copy.deepcopy(seasonal_model_Ct)
-    
+        # Predict for whole dataset
+        self._data['Ct'] = sm_ct.predict(newdata=self._data)
+        self._seasonal_model_ct = sm_ct
+
     def compute_risk_drivers(self):
-        """
-        Compute the risk drivers and impute observations that exceed clear sky level.
-        """
+        """Calculate risk drivers (Xt) and handle outliers."""
         target = self._spec.target
-        control = self._spec
-        data = self._data.copy()
-        transform = self._transform
+        data = self._data
         
-        if control.stochastic_clearsky:
-            # Risk driver
-            data['Xt'] = transform.X(data[target].values, data['clearsky'].values)
-            
-            # Detect and impute outliers
-            outliers = clearsky_outliers(
-                data['GHI'].values,
-                data['clearsky'].values,
-                date=data['date'].values,
-                quiet=control.quiet
-            )
-            
-            # Update GHI
-            data['GHI'] = outliers['x']
-            
-            # Risk driver
-            data['Xt'] = transform.X(data['GHI'].values, data['clearsky'].values)
-        else:
-            # Detect and impute outliers
-            outliers = clearsky_outliers(
-                data['GHI'].values,
-                data['Ct'].values,
-                date=data['date'].values,
-                quiet=control.quiet
-            )
-            
-            # Update GHI
-            data['GHI'] = outliers['x']
-            
-            # Add computed risk driver
-            data['Xt'] = transform.X(data['GHI'].values, data['Ct'].values)
+        # Outlier detection (Using your previously translated function)
+        env_limit = data['clearsky'] if self._spec.stochastic_clearsky else data['Ct']
+        self._outliers = clearsky_outliers(data['GHI'], env_limit, date=data['date'], quiet=self._spec.quiet)
         
+        # Update GHI with imputed values
+        data['GHI'] = self._outliers['x']
+        
+        # Compute Transformed Variable (Xt)
+        data['Xt'] = self._transform.X(data[target], env_limit)
+    
         # Update data
         self._data['Xt'] = data['Xt']
-        
-        # Store outliers data
-        self._outliers = outliers
-    
+
     def fit_transform(self):
-        """
-        Fit the parameters of the SolarTransform object.
-        """
+        """Optimize alpha/beta for the solar transform."""
         control = self._spec.transform
-        data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)].copy()
-        outliers = self._outliers
+        train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
         
-        # Fit transformation parameters
-        params = self._transform.fit(
-            data['Xt'].values,
-            threshold=control['threshold'],
-            min_pos=control['min_pos'],
-            max_pos=control['max_pos']
-        )
-        
-        # Update transform parameters
+        # Fit parameters
+        params = self._transform.fit(train_data['Xt'], control['threshold'], control['min_pos'], control['max_pos'])
         self._transform.update(params['alpha'], params['beta'])
         
-        data = self._data.copy()
+        # Post-process Xt to avoid boundary issues in ARMA-GARCH
+        self._data['Xt'] = np.where(self._data['Xt'] <= params['Xt_min'], params['Xt_min'] * (1 + control['delta']), self._data['Xt'])
+        self._data['Xt'] = np.where(self._data['Xt'] >= params['Xt_max'], params['Xt_max'] * (1 - control['delta']), self._data['Xt'])
         
-        # Rescale minimum to avoid extreme values
-        idx_Xt_min = data['Xt'] <= params['Xt_min']
-        data.loc[idx_Xt_min, 'Xt'] = params['Xt_min'] * (1 + control['delta'])
-        
-        # Rescale maximum
-        idx_Xt_max = data['Xt'] >= params['Xt_max']
-        data.loc[idx_Xt_max, 'Xt'] = params['Xt_max'] * (1 - control['delta'])
-        
-        # Store the index of imputed values
-        if outliers is None:
-            outliers = {'index_type': {}}
-        if 'index_type' not in outliers:
-            outliers['index_type'] = {}
-        
-        outliers['index_type']['transform'] = list(np.where(idx_Xt_min | idx_Xt_max)[0])
-        
-        # Update outliers index and dates
-        all_indices = set(outliers.get('index', []))
-        all_indices.update(outliers['index_type']['transform'])
-        outliers['index'] = sorted(list(all_indices))
-        outliers['date'] = data.iloc[outliers['index']]['date'].values
-        
-        # Compute the transformed variable
-        data['Yt'] = self._transform.Y(self._transform.X_prime(data['Xt'].values))
-        
-        # Update private data
-        self._data['Yt'] = data['Yt']
-        self._outliers = outliers
-    
-    def fit_seasonal_model_Yt(self):
-        """
-        Fit a seasonal model on the transformed variable (Yt) and compute deseasonalized series.
-        """
-        target = self._spec.target
+        # Calculate Yt (The Gaussianized variable)
+        self._data['Yt'] = self._transform.Y(self._transform.X_prime(self._data['Xt']))
+
+    def fit_seasonal_model_yt(self):
+        """Fit seasonal mean to Yt."""
         control = self._spec.seasonal_mean
-        data = self._data.copy()
+        target = self._spec.target
+        train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
         
-        # Train data
-        data_train = data[data['isTrain'] & (data['weights'] != 0)].copy()
+        sm_yt = seasonalModel(orders=control['order'], periods=control['period'])
+        sm_yt.fit(train_data, target_col='Yt', time_col='n', include_intercept=control['include_intercept'], include_trend=control['include_trend'])
         
-        # Initialize the seasonal model for Yt
-        seasonal_model_Yt = SeasonalModel(
-            order=control['order'],
-            period=control['period']
-        )
-        
-        # Fit with appropriate formula
-        seasonal_model_Yt.fit(
-            y=data_train['Yt'].values,
-            t=data_train['n'].values,
-            include_intercept=control['include_intercept'],
-            include_trend=control['include_trend']
-        )
-        
-        # Compute Yt_bar
-        data['Yt_bar'] = seasonal_model_Yt.predict(data['n'].values)
-        
-        # Compute Yt_tilde
-        data['Yt_tilde'] = data['Yt'] - data['Yt_bar']
+        self._data['Yt_bar'] = sm_yt.predict(self._data)
+        self._data['Yt_tilde'] = self._data['Yt'] - self._data['Yt_bar']
+        self._data[f'{target}_bar'] = self._transform.iRY(self._data['Yt_bar'], self._data['Ct'])
         
         # Store seasonal model for Yt
-        self._seasonal_model_Yt = copy.deepcopy(seasonal_model_Yt)
-        
-        # Update data
-        self._data['Yt_tilde'] = data['Yt_tilde']
-        self._data['Yt_bar'] = data['Yt_bar']
-        self._data[f'{target}_bar'] = self._transform.iRY(
-            data['Yt_bar'].values,
-            data['Ct'].values
-        )
-    
+        self._seasonal_model_yt = sm_yt
+
     def fit_monthly_mean(self):
-        """
-        Correct the deseasonalized series by subtracting its monthly mean.
-        """
-        control = self._spec
-        
-        if control.seasonal_mean['monthly_mean']:
-            data = self._data.copy()
-            
-            # Train data
-            train_data = data[data['isTrain'] & (data['weights'] != 0)]
-            
-            # Compute monthly unconditional mean
+        """Center Yt_tilde by month."""
+        if self._spec.seasonal_mean['monthly_mean']:
+            train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
             monthly_mean = train_data.groupby('Month')['Yt_tilde'].mean().reset_index()
             monthly_mean.columns = ['Month', 'Yt_tilde_uncond']
             
-            # Add unconditional mean to the dataset
-            data = data.merge(monthly_mean, on='Month', how='left')
+            # Merge back
+            self._data = self._data.merge(monthly_mean, on='Month', how='left')
+            self._data['Yt_tilde'] = self._data['Yt_tilde'] - self._data['Yt_tilde_uncond']
             
-            # Update Yt_tilde
-            data['Yt_tilde'] = data['Yt_tilde'] - data['Yt_tilde_uncond']
-            
-            # Update monthly data
-            self._monthly_data['Yt_tilde_uncond'] = monthly_mean['Yt_tilde_uncond'].values
-            
-            # Update private data
-            self._data['Yt_tilde'] = data['Yt_tilde']
-    
-    def fit_ARMA(self):
-        """
-        Fit an ARMA model on Yt_tilde and compute ARMA residuals (eps).
-        """
+            # Update monthly tracking
+            self._monthly_data['Yt_tilde_uncond'] = monthly_mean['Yt_tilde_uncond']
+
+    def fit_arma(self):
+        """Fit ARMA model to deseasonalized series."""
         control = self._spec.mean_model
-        data = self._data.copy()
+        train_data = self._data[self._data['isTrain']]
         
-        # Train data
-        data_train = data[data['isTrain']].copy()
+        arma = armaModel(ar=control['arOrder'], ma=control['maOrder'], intercept=control['include_intercept'])
+        arma.fit(train_data['Yt_tilde'])
         
-        # Initialize an ARMA model
-        ARMA = ARMAModel(
-            ar_order=control['arOrder'],
-            ma_order=control['maOrder'],
-            include_intercept=control['include_intercept']
-        )
-        
-        # Fit ARMA model
-        ARMA.fit(data_train['Yt_tilde'].values)
-        
-        # Fitted Yt_tilde
-        data['Yt_tilde_hat'] = ARMA.filter(data['Yt_tilde'].values)
-        
-        # Fitted residuals
-        data['eps'] = data['Yt_tilde'] - data['Yt_tilde_hat']
-        
-        # Store ARMA model
-        self._ARMA = copy.deepcopy(ARMA)
-        
-        # Update data
-        self._data['Yt_tilde_hat'] = data['Yt_tilde_hat']
-        self._data['eps'] = data['eps']
-    
+        self._data['Yt_tilde_hat'] = arma.filter(self._data['Yt_tilde'])
+        self._data['eps'] = self._data['Yt_tilde'] - self._data['Yt_tilde_hat']
+        self._arma = arma
+
     def fit_seasonal_variance(self):
-        """
-        Fit a seasonal model on ARMA squared residuals and compute deseasonalized residuals.
-        """
+        """Fit seasonal variance to ARMA residuals."""
         control = self._spec.seasonal_variance
-        data = self._data.copy()
+        train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)].copy()
+        train_data['eps2'] = train_data['eps']**2
         
-        # Train data
-        data_train = data[data['isTrain'] & (data['weights'] != 0)].copy()
+        sv = seasonalModel(orders=control['order'], periods=control['period'])
+        sv.fit(train_data, target_col='eps2', time_col='n', include_intercept=True, include_trend=control['include_trend'])
         
-        # Squared residuals
-        data_train['eps2'] = data_train['eps'] ** 2
-        
-        # Initialize the seasonal model for eps2
-        seasonal_variance = SeasonalModel(
-            order=control['order'],
-            period=control['period']
-        )
-        
-        # Fit seasonal variance
-        seasonal_variance.fit(
-            y=data_train['eps2'].values,
-            t=data_train['n'].values,
-            include_intercept=True,
-            include_trend=control['include_trend']
-        )
-        
-        # Fitted seasonal standard deviation
-        self._data['sigma_bar'] = np.sqrt(seasonal_variance.predict(data['n'].values))
-        
+        self._data['sigma_bar'] = np.sqrt(sv.predict(self._data))
         # Compute standardized residuals
         self._data['eps_tilde'] = self._data['eps'] / self._data['sigma_bar']
-        
-        # Store seasonal variance model
-        self._seasonal_variance = copy.deepcopy(seasonal_variance)
+        self._seasonal_variance = sv
         
         # Compute monthly corrective variance
         self.fit_monthly_variance()
-        
         # Correction of parameters to ensure unitary variance
         self.correct_seasonal_variance()
-    
+
     def fit_monthly_variance(self):
-        """
-        Correct the standardized series by dividing by its monthly standard deviation.
-        """
-        control = self._spec.seasonal_variance
-        data = self._data.copy()
-        
-        if control['monthly_mean']:
-            # Train data
-            train_data = data[data['isTrain'] & (data['weights'] != 0)]
+        if self._spec.seasonal_variance['monthly_mean']:
+            train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
+            monthly_sd = train_data.groupby('Month')['eps_tilde'].std().reset_index()
+            monthly_sd.columns = ['Month', 'sigma_uncond']
             
-            # Compute monthly unconditional std deviation
-            monthly_data = train_data.groupby('Month')['eps_tilde'].std().reset_index()
-            monthly_data.columns = ['Month', 'sigma_uncond']
+            self._data = self._data.merge(monthly_sd, on='Month', how='left', suffixes=('', '_new'))
+            self._data['sigma_uncond'] = self._data['sigma_uncond_new']
+            self._data = self._data.drop(columns=['sigma_uncond_new'])
             
-            # Add unconditional variance to monthly data
-            self._monthly_data['sigma_uncond'] = monthly_data['sigma_uncond'].values
-            
-            # Merge with data
-            data = data.merge(monthly_data, on='Month', how='left')
-            
-            # Updated standardized residuals
-            self._data['eps_tilde'] = self._data['eps'] / (
-                self._data['sigma_bar'] * data['sigma_uncond']
-            )
-    
+            self._data['eps_tilde'] = self._data['eps'] / (self._data['sigma_bar'] * self._data['sigma_uncond'])
+            self._monthly_data['sigma_uncond'] = monthly_sd['sigma_uncond']
+
     def correct_seasonal_variance(self):
-        """
-        Correct the parameters of the seasonal variance to ensure unitary variance.
-        """
-        control = self._spec.seasonal_variance
-        data = self.data.copy()
-        
-        # Initialize correction factor
-        if not hasattr(self._seasonal_variance, 'extra_params'):
-            self._seasonal_variance.extra_params = {}
-        self._seasonal_variance.extra_params['correction'] = 1.0
-        
-        if control['correction']:
-            seasonal_variance = copy.deepcopy(self._seasonal_variance)
+        """Ensure standardized residuals have exactly unitary variance."""
+        if self._spec.seasonal_variance['correction']:
+            train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
+            correction_factor = train_data['eps_tilde'].var()
             
-            # Update train data
-            data_train = data[data['isTrain'] & (data['weights'] != 0)]
+            # Update the seasonal variance model coefficients
+            new_coefs = self._seasonal_variance.coefficients * correction_factor
+            self._seasonal_variance.update(new_coefs)
             
-            # Calculate variance correction factor
-            correction_factor = np.var(
-                data_train['eps'] / (data_train['sigma_bar'] * data_train['sigma_uncond'])
-            )
-            seasonal_variance.extra_params['correction'] = correction_factor
-            
-            # Correct parameters
-            corrected_coefs = seasonal_variance.coefficients * correction_factor
-            seasonal_variance.update(corrected_coefs)
-            
-            # Update sigma_bar
-            self._data['sigma_bar'] = np.sqrt(
-                seasonal_variance.predict(self._data['n'].values)
-            )
-            
-            # Updated standardized residuals
-            self._data['eps_tilde'] = self._data['eps'] / (
-                self._data['sigma_bar'] * self.data['sigma_uncond']
-            )
-            
-            # Update seasonal variance model
-            self._seasonal_variance = seasonal_variance
-    
-    def fit_GARCH(self):
-        """
-        Fit a GARCH model on the deseasonalized residuals (eps_tilde).
-        """
+            # Recalculate
+            self._data['sigma_bar'] = np.sqrt(self._seasonal_variance.predict(self._data))
+            self._data['eps_tilde'] = self._data['eps'] / (self._data['sigma_bar'] * self._data['sigma_uncond'])
+
+    def fit_garch(self):
+        """Fit GARCH model to standardize residuals further."""
         control = self._spec
-        data = self._data.copy()
+        train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
         
-        # Train data
-        data_train = data[data['isTrain'] & (data['weights'] != 0)]
-        
-        # GARCH specification
-        GARCH_spec = control.variance_model
-        
-        # Initialize a GARCH model
-        GARCH_model = sGARCH(
-            arch_order=GARCH_spec['archOrder'],
-            garch_order=GARCH_spec['garchOrder']
-        )
-        
-        # Control for garch variance
+        garch = sGARCH(arch_order=control.variance_model['archOrder'], garch_order=control.variance_model['garchOrder'])
         if control.garch_variance:
-            # Fit the model
-            GARCH_model.fit(
-                data_train['eps_tilde'].values,
-                weights=data_train['weights'].values
-            )
-            
-            # Fitted std. deviation
-            data['sigma'] = np.sqrt(GARCH_model.filter(data['eps_tilde'].values))
-            
-            # Fitted standardized residuals
-            data['u_tilde'] = data['eps_tilde'] / data['sigma']
+            garch.fit(train_data['eps_tilde'], weights=train_data['weights'])
+            self._data['sigma'] = np.sqrt(garch.filter(self._data['eps_tilde']))
+            self._data['u_tilde'] = self._data['eps_tilde'] / self._data['sigma']
         else:
-            # No GARCH
-            data['sigma'] = 1.0
-            data['u_tilde'] = data['eps_tilde']
-        
-        # Store GARCH parameters
-        self._GARCH = copy.deepcopy(GARCH_model)
-        
-        # Update data
-        self._data['sigma'] = data['sigma']
-        self._data['u_tilde'] = data['u_tilde']
-    
-    def fit_NM_model(self):
-        """
-        Initialize and fit a Gaussian Mixture model.
-        """
+            self._data['sigma'] = 1.0
+            self._data['u_tilde'] = self._data['eps_tilde']
+            
+        self._garch = garch
+
+    def fit_nm_model(self):
+        """Fit Gaussian Mixture Model to standardized residuals."""
         control = self._spec.mixture_model
-        outliers = self._outliers
-        
-        # Train data
-        data_train = self._data[
-            self._data['isTrain'] & (self._data['weights'] != 0)
-        ].copy()
+        train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
         
         # Gaussian Mixture fitted only on train data
-        NM_model = SolarMixture(
-            components=2,
-            abstol=control['abstol'],
-            maxit=control['maxit'],
-            maxrestarts=control['maxrestarts']
-        )
-        
-        # Match moments if specified
+        nm = solarMixture(components=2, abstol=control['abstol'], maxit=control['maxit'], maxrestarts=control['maxrestarts'])
+
+        # Logic for matching expectation or variance (Duffie & Beckman style constraint)
         if control['match_expectation'] or control['match_variance']:
-            # Target empirical moments
-            target = data_train.groupby('Month')['u_tilde'].agg([
-                ('mu_target', 'mean'),
-                ('var_target', 'var')
-            ]).reset_index()
+            # 1. Calculate monthly empirical moments
+            # We aggregate by Month to get a vector of 12 targets
+            target = train_data.groupby('Month')['u_tilde'].agg(
+                mu_target='mean', 
+                var_target='var'
+            ).reset_index()
             
-            # Match or not empirical moments
+            # 2. Handle non-empirical matching (target 0 mean, 1 variance)
             if not control['match_empiric']:
                 target['mu_target'] = 0.0
                 target['var_target'] = 1.0
             
-            # Match or not expectation
-            if not control['match_expectation']:
-                target['mu_target'] = None
-            
-            # Match or not variance
-            if not control['match_variance']:
-                target['var_target'] = None
-            
-            NM_model.fit(
-                x=data_train['u_tilde'].values,
-                date=data_train['date'].values,
-                weights=data_train['weights'].values,
-                mu_target=target['mu_target'].values,
-                var_target=target['var_target'].values,
+            # 3. Prepare target vectors (Use None for R's NA to signal the fitter to ignore the constraint)
+            mu_target = target['mu_target'].values if control['match_expectation'] else None
+            var_target = target['var_target'].values if control['match_variance'] else None
+
+            # 4. Fit with constraints
+            nm.fit(
+                x=train_data['u_tilde'], 
+                date=train_data['date'], 
+                weights=train_data['weights'],
+                mu_target=mu_target, 
+                var_target=var_target,
                 method=control['method']
             )
         else:
-            NM_model.fit(
-                x=data_train['u_tilde'].values,
-                date=data_train['date'].values,
-                weights=data_train['weights'].values,
+            # Standard fit without moment constraints
+            nm.fit(
+                x=train_data['u_tilde'], 
+                date=train_data['date'], 
+                weights=train_data['weights'],
                 method=control['method']
             )
         
-        # Store Gaussian Mixture parameters
-        self._NM_model = copy.deepcopy(NM_model)
+        self._nm_model = nm
+
+def update(self, params=None):
+    """
+    Update the parameters of all sub-models within the SolarModel.
     
-    def update_NM_classification(self, filter=False):
-        """
-        Update the classification of the Bernoulli random variable.
-        
-        Parameters:
-        -----------
-        filter : bool
-            When True, update mixture classification before classifying
-        """
-        if filter:
-            self._NM_model.filter()
-        
-        # Complete data
-        data = self._data.copy()
-        
-        # Remove existing classification columns
-        data = data.drop(['B', 'z1', 'z2'], axis=1, errors='ignore')
-        
-        # Classify the series by month
-        df_list = []
-        for nmonth in range(1, 13):
-            df_m = data[data['Month'] == nmonth].copy()
-            
-            # Classify
-            classification = self._NM_model.model[nmonth].classify(
-                df_m['u_tilde'].values
-            )
-            
-            df_m['B'] = classification['B1']
-            df_m['z1'] = classification['z1']
-            df_m['z2'] = classification['z2']
-            
-            df_list.append(df_m[['date', 'B', 'z1', 'z2']])
-        
-        # Merge classifications back
-        df_classifications = pd.concat(df_list, ignore_index=True)
-        data = data.merge(df_classifications, on='date', how='left')
-        
-        # Update private data
-        self._data['B'] = data['B']
-        self._data['z1'] = data['z1']
-        self._data['z2'] = data['z2']
-    
-    def update(self, params):
-        """
-        Update the parameters inside the model.
-        
-        Parameters:
-        -----------
-        params : dict or array-like
-            Model parameters to update
-        """
-        if params is None:
-            print("`params` is missing, nothing to update!")
-            return
-        
-        if not isinstance(params, dict):
-            params = solarModel_match_params(params, self.coefficients)
-        
-        # Update transform parameters
-        self._transform.update(params['params']['alpha'], params['params']['beta'])
-        
-        # Update clear sky model
-        self._seasonal_model_Ct.update(params['seasonal_model_Ct'])
-        
-        # Update seasonal mean model
-        self._seasonal_model_Yt.update(params['seasonal_model_Yt'])
-        
-        # Update ARMA mean model
-        self._ARMA.update(params['ARMA'])
-        
-        # Update seasonal variance model
-        self._seasonal_variance.update(params['seasonal_variance'])
-        
-        # Update GARCH variance model
-        self._GARCH.update(params['GARCH'])
-        
-        # Update Gaussian Mixture model
-        means = np.column_stack([
-            params['NM_mu_up'],
-            params['NM_mu_dw']
-        ])
-        sd = np.column_stack([
-            params['NM_sd_up'],
-            params['NM_sd_dw']
-        ])
-        p = np.column_stack([
-            params['NM_p_up'],
-            1 - params['NM_p_up']
-        ])
-        
-        self._NM_model.update(means=means, sd=sd, p=p)
-        
-        # Set log-likelihood to NA
-        self._loglik = None
-    
+    Args:
+        params (dict): A nested dictionary containing parameter updates. 
+                       Should follow the structure of self.coefficients.
+    """
+    if params is None:
+        print("`params` is missing, nothing to update!")
+        return
+
+    if not isinstance(params, dict):
+        params = solarModel_match_params(params, self.coefficients)
+
+    if 'params' in params:
+        self._transform.update(params['alpha'], params['beta'])
+
+    # Update clear sky model
+    self._seasonal_model_ct.update(params['seasonal_model_ct'])
+    # Update seasonal mean model
+    self._seasonal_model_yt.update(params['seasonal_model_yt'])
+    # Update ARMA model
+    self._arma.update(params['ARMA'])
+    # Update GARCH model
+    self._garch.update(params['GARCH'])
+    # Update seasonal variance model
+    self._seasonal_variance.update(params['seasonal_variance'])
+
+    # Update Gaussian Mixture Model (NM_model)
+    means = np.column_stack((params['NM_mu_up'], params['NM_mu_dw']))
+    sds = np.column_stack((params['NM_sd_up'], params['NM_sd_dw']))
+    probs = np.column_stack((params['NM_p_up'], 1 - params['NM_p_up']))
+
+    # Update the NM sub-model
+    self._nm_model.update(means=means, sd=sds, p=probs)
+
+    # Invalidate the stored total log-likelihood
+    self._loglik = None
+
     def update_moments(self):
-        """Update the moments inside the model."""
-        # Update conditional moments
+        """
+        Update the internal state for conditional and unconditional moments.
+        Calculates expected values and variances across the time series.
+        """
+        # 1. Update conditional moments
+        # Uses the 'data' property which includes seasonal joins
+        # and the 'spec' property for model constraints.
         self._moments['conditional'] = solarMoments_conditional(
-            self.data,
+            self._data, 
             control_model=self._spec
         )
-        
-        # Update unconditional moments
+
+        # 2. Update unconditional moments
+        # Passes the ARMA and GARCH sub-models explicitly as required by the R logic.
         self._moments['unconditional'] = solarMoments_unconditional(
             self.data,
-            ARMA=self._ARMA,
-            GARCH=self._GARCH
+            ARMA=self._arma,
+            GARCH=self._garch
         )
-    
+
     def update_logLik(self):
-        """Update the log-likelihood inside the model."""
-        # Update the log-likelihoods
+        """
+        Update individual and total log-likelihood values.
+        Synchronizes the observation-level densities with the aggregate model score.
+        """
+        # 1. Update individual log-likelihoods
+        # self.log_lik() is assumed to return a pandas Series or numpy array 
+        # aligned with the internal data.
         self._data['loglik'] = self.logLik()
-        
-        # Update total log-likelihood
-        self._loglik = self._data['loglik'].sum()
-    
+
+        # 2. Update the total log-likelihood attribute
+        # We use skipna=False to match R's default behavior where 
+        # a single NA makes the whole sum NA. 
+        # If your pipeline handles NaNs elsewhere, you can use the default skipna=True.
+        self._loglik = self.data['loglik'].sum() 
+
     def update_risk_drivers(self):
-        """Update the clear sky and risk drivers."""
-        # Update clear sky
-        self._data['Ct'] = self._seasonal_model_Ct.predict(self._data['n'].values)
-        
-        # Update risk driver
+        """
+        Synchronize the clear sky envelope, risk drivers, and solar transform.
+        Ensures that the Gaussianized series Yt is updated following any 
+        parameter changes in the astronomical components.
+        """
+        # 1. Update clear sky (Ct)
+        # Using the data property to ensure seasonal features are joined for prediction.
+        # self._seasonal_model_ct is an instance of SeasonalClearsky.
+        self._data['Ct'] = self._seasonal_model_ct.predict(newdata=self.data)
+
+        # 2. Update risk driver (Xt)
+        # This method handles outlier detection and computes the raw risk driver.
+        # It is assumed to be defined as part of the SolarModel class.
         self.compute_risk_drivers()
-        
-        # Update solar transform and compute Yt
+
+        # 3. Update solar transform and compute Yt
+        # This method re-fits alpha/beta and computes the Gaussianized variable.
+        # It is assumed to be defined as part of the SolarModel class.
         self.fit_transform()
-    
+
+    def update_nm_classification(self, run_filter=False):
+        """
+        Update the classification of the Bernoulli random variable and Gaussian components.
+        
+        Args:
+            run_filter (bool): If True, updates the mixture classification 
+                               via the NM model before re-classifying.
+        """
+        if run_filter:
+            # Update mixture classification via the latent model
+            self._nm_model.filter()
+
+        # 1. Prepare data and clean existing classification columns
+        data = self._data.copy()
+        cols_to_drop = [c for c in ['B', 'z1', 'z2'] if c in data.columns]
+        if cols_to_drop:
+            data = data.drop(columns=cols_to_drop)
+
+        # 2. Classify the series month-by-month
+        monthly_results = []
+        
+        for month in range(1, 13):
+            # Filter data for the specific month
+            month_mask = data['Month'] == month
+            df_month = data[month_mask].copy()
+            
+            if df_month.empty:
+                continue
+                
+            # Classify using the sub-model for this month (0-indexed list)
+            # Assuming self._nm_model.models is the list of 12 sub-models
+            nm_results = self._nm_model.models[month - 1].classify(df_month['u_tilde'])
+            
+            # Extract Bernoulli variable and Gaussian components
+            df_month['B'] = nm_results['B1']
+            df_month['z1'] = nm_results['z1']
+            df_month['z2'] = nm_results['z2']
+            
+            # Select only the key and new columns for the join
+            monthly_results.append(df_month[['date', 'B', 'z1', 'z2']])
+
+        # 3. Consolidate results
+        all_classifications = pd.concat(monthly_results)
+        
+        # Merge back to the internal data storage using 'date' as the key
+        self._data = self._data.merge(all_classifications, on='date', how='left')
+
     def filter(self, fit=True):
         """
-        Filter the time series when new parameters are supplied via update().
+        Re-propagate values through the modeling pipeline to synchronize
+        residuals with the current model parameters.
         
-        Parameters:
-        -----------
-        fit : bool
-            When True, monthly mean and variances will be re-estimated
+        Args:
+            fit (bool): If True, re-estimates monthly corrections and 
+                        applies seasonal variance scaling.
         """
-        control = self._spec
         target = self._spec.target
+        data = self._data
+
+        # 1. Update Seasonal Mean of Yt
+        # Uses the seasonalModel_Yt sub-model
+        data['Yt_bar'] = self._seasonal_model_yt.predict(newdata=self.data)
         
-        # Update seasonal mean of Yt
-        self._data['Yt_bar'] = self._seasonal_model_Yt.predict(self._data['n'].values)
+        # 2. Update Seasonal Mean of the Target variable (GHI/clearsky)
+        # Using the inverse transform iRY(Yt_bar, Ct)
+        data[f'{target}_bar'] = self._transform.iRY(data['Yt_bar'], data['Ct'])
         
-        # Update seasonal mean of target variable
-        self._data[f'{target}_bar'] = self._transform.iRY(
-            self._data['Yt_bar'].values,
-            self._data['Ct'].values
-        )
+        # 3. Compute Deseasonalized Series
+        data['Yt_tilde'] = data['Yt'] - data['Yt_bar']
         
-        # Update Yt_tilde
-        self._data['Yt_tilde'] = self._data['Yt'] - self._data['Yt_bar']
-        
-        # Fit the corrective mean
+        # Re-estimate monthly mean correction if specified
         if fit:
             self.fit_monthly_mean()
-        
-        # Update Yt_tilde_hat
-        self._data['Yt_tilde_hat'] = self._ARMA.filter(self._data['Yt_tilde'].values)
-        
-        # Update ARMA residuals
-        self._data['eps'] = self._data['Yt_tilde'] - self._data['Yt_tilde_hat']
-        
-        # Update seasonal std. deviation
-        self._data['sigma_bar'] = np.sqrt(
-            self._seasonal_variance.predict(self._data['n'].values)
-        )
-        
-        # Update standardized residuals
-        self._data['eps_tilde'] = self._data['eps'] / self._data['sigma_bar']
-        
-        if fit:
-            # Compute corrective monthly variance
-            self.fit_monthly_variance()
             
-            # Correct the seasonal variance
+        # 4. Update ARMA Filter and Residuals
+        data['Yt_tilde_hat'] = self._arma.filter(data['Yt_tilde'])
+        data['eps'] = data['Yt_tilde'] - data['Yt_tilde_hat']
+        
+        # 5. Update Seasonal Volatility and Standardized Residuals
+        # Predict sigma_bar (seasonal standard deviation)
+        data['sigma_bar'] = np.sqrt(self._seasonal_variance.predict(data))
+        data['eps_tilde'] = data['eps'] / data['sigma_bar']
+        
+        # Re-estimate monthly variance and apply parameter correction if specified
+        if fit:
+            self.fit_monthly_variance()
             self.correct_seasonal_variance()
-        
-        # Update GARCH standard deviation
+            
+        # 6. Update GARCH Conditional Volatility
         if self._spec.garch_variance:
-            self._data['sigma'] = np.sqrt(
-                self._GARCH.filter(self._data['eps_tilde'].values)
-            )
+            data['sigma'] = np.sqrt(self._garch.filter(data['eps_tilde']))
         else:
-            self._data['sigma'] = 1.0
-        
-        # Fitted standardized residuals
-        self._data['u_tilde'] = self._data['eps_tilde'] / self._data['sigma']
-    
-    def Moments(self, t_now, t_hor, theta=0, quiet=False):
+            data['sigma'] = 1.0
+            
+        # 7. Final Standardized Residuals
+        data['u_tilde'] = data['eps_tilde'] / data['sigma']
+
+    def moments(self, t_now, t_hor, theta=0, quiet=False):
         """
-        Compute the conditional moments.
+        Compute conditional moments for a sequence of future dates.
         
-        Parameters:
-        -----------
-        t_now : str
-            Today's date
-        t_hor : str or list
-            Horizon date(s)
-        theta : float
-            Shift parameter for the mixture
-        quiet : bool
-            Suppress verbose messages
-        
+        Args:
+            t_now (str/datetime): Reference date for the forecast.
+            t_hor (list/pd.DatetimeIndex): Sequence of future dates to forecast.
+            theta (float): Shift parameter for the mixture model.
+            quiet (bool): If True, suppresses diagnostic messages.
+            
         Returns:
-        --------
-        pd.DataFrame
-            DataFrame with computed moments
+            pd.DataFrame: A combined DataFrame of moments for each date in t_hor.
         """
-        if isinstance(t_hor, str):
-            t_hor = [t_hor]
-        
+        # 1. Ensure t_hor is iterable (handles single date or list)
+        if isinstance(t_hor, (str, pd.Timestamp)):
+            t_hor_list = [t_hor]
+        else:
+            t_hor_list = t_hor
+            
+        # Map over the horizon dates and call solarMoments
         results = []
-        for t_h in t_hor:
-            moment = solarMoments(
-                t_now, t_h,
-                self.data, self._ARMA,
-                self._GARCH, self._NM_model,
-                self._transform,
-                theta=theta,
-                quiet=quiet
+        for t in t_hor_list:
+            moment_row = solarMoments(
+                t_now, t, self._data, self._arma, self._garch, self._nm_model,
+                self._transform, theta=theta, quiet=quiet
             )
-            results.append(moment)
+            results.append(moment_row)
         
-        return pd.concat(results, ignore_index=True)
-    
+        return pd.concat(results, ignore_index=True) if results else pd.DataFrame()
+
     def VaR(self, moments=None, t_now=None, t_hor=None, theta=0, ci=0.05):
         """
         Compute Value at Risk for the solar model.
-        
-        Parameters:
-        -----------
-        moments : pd.DataFrame, optional
-            Pre-computed moments
-        t_now : str
-            Today's date
-        t_hor : str
-            Horizon date
-        theta : float
-            Shift parameter
-        ci : float
-            Confidence interval (one tail)
-        
-        Returns:
-        --------
-        pd.DataFrame
-            DataFrame with VaR computations
         """
-        # Compute moments if not provided
+        # 1. Generate moments if not provided
         if moments is None:
-            t_seq = pd.date_range(start=t_now, end=t_hor, freq='D')[1:]
-            moments = pd.concat([
-                self.Moments(t_now, str(t.date()), theta, quiet=False)
-                for t in t_seq
-            ])
-        
-        # Add realized GHI
-        moments = moments.merge(
-            self.data[['date', 'GHI']],
-            on='date',
+            # Generate sequence from t_now + 1 day to t_hor
+            start_date = pd.to_datetime(t_now) + pd.Timedelta(days=1)
+            t_seq = pd.date_range(start=start_date, end=t_hor, freq='D')
+            
+            # Call the internal moments method (translated previously)
+            moments = self.moments(t_now, t_seq, theta=theta, quiet=False)
+
+        # 2. Add realized GHI from internal data
+        # self.data is the property that joins seasonal features
+        moments = pd.merge(
+            moments, 
+            self.data[['date', 'GHI']], 
+            on='date', 
             how='left'
         )
-        
-        # Initialize VaR
+
+        # 3. Initialize VaR column
         moments['VaR'] = np.nan
         
-        link = self._spec.transform['link']
-        
+        # 4. Loop through each time step to calculate the quantile
         for i in range(len(moments)):
-            df_n = moments.iloc[i]
+            row = moments.iloc[i]
             
-            # CDF of Yt
-            def cdf_Y(x):
-                return pmixnorm(
-                    x,
-                    mean=[df_n['M_Y1'], df_n['M_Y0']],
-                    sd=[df_n['S_Y1'], df_n['S_Y0']],
-                    alpha=[df_n['p1'], 1 - df_n['p1']]
-                )
-            
-            # Value at Risk
-            moments.loc[i, 'VaR'] = qsolarGHI(
-                ci, df_n['Ct'], df_n['alpha'],
-                df_n['beta'], cdf_Y, link=link
+            # Define the CDF of the Gaussian Mixture in the Yt space
+            # F(x) = p1 * Phi((x - mu1)/sigma1) + (1 - p1) * Phi((x - mu0)/sigma0)
+            def cdf_y(x):
+                term1 = norm.cdf(x, row['M_Y1'], row['S_Y1']) * row['p1']
+                term2 = norm.cdf(x, row['M_Y0'], row['S_Y0']) * (1 - row['p1'])
+                return term1 + term2
+                
+            # Compute Value at Risk using the inverse transform logic
+            moments.at[i, 'VaR'] = qsolar_ghi(
+                ci, 
+                row['Ct'], 
+                row['alpha'], 
+                row['beta'], 
+                cdf_y, 
+                link=self.spec.transform['link']
             )
-        
-        # Violations of VaR
+
+        # 5. Identify Violations
+        # et = 1 if GHI < VaR, else 0
         moments['et'] = (moments['GHI'] < moments['VaR']).astype(int)
-        
-        # Select only relevant variables
+
+        # 6. Ensure date components are present for the final selection
+        moments['Year'] = moments['date'].dt.year
+        moments['Month'] = moments['date'].dt.month
+        moments['Day'] = moments['date'].dt.day
+
+        # Select and return relevant variables
         return moments[['date', 'Year', 'Month', 'Day', 'GHI', 'VaR', 'et']]
-    
+
     def logLik(self, moments=None, target="Yt", quasi=False):
         """
         Compute the log-likelihood of the model.
         
-        Parameters:
-        -----------
-        moments : pd.DataFrame, optional
-            Dataset containing the moments
-        target : str
-            Target variable ("Yt" or "GHI")
-        quasi : bool
-            When True, compute pseudo-likelihood with Gaussian link
-        
+        Args:
+            moments (pd.DataFrame): Optional pre-computed moments. Defaults to conditional moments.
+            target (str): The variable space for the likelihood ("Yt" or "GHI").
+            quasi (bool): If True, uses a single Gaussian density (pseudo-likelihood).
+                        If False, uses the full Gaussian Mixture density.
+                        
         Returns:
-        --------
-        np.ndarray
-            Log-likelihood values
+            pd.Series: Vector of log-likelihood values for each observation.
         """
-        # Default argument
+        # 1. Handle default moments
         if moments is None:
-            moments = self._moments['conditional'].copy()
+            moments = self.moments['conditional']
         
-        # Add target and weights
-        moments = moments.merge(
-            self._data[['date', target, 'weights', 'isTrain']],
-            on='date',
+        # 2. Join with internal data to get target values, weights, and training flags
+        # Equivalent to dplyr::left_join(moments, private$..data, by = "date")
+        m = moments.merge(
+            self._data[['date', target, 'weights', 'isTrain']], 
+            on='date', 
             how='left'
         )
         
-        # Compute log-likelihood
-        moments['loglik'] = 0.0
+        # Initialize log-likelihood array
+        loglik = np.zeros(len(m))
         
-        link = self._spec.transform['link']
-        
+        # 3. Density calculation in physical space (GHI)
         if target == "GHI":
-            for i in range(len(moments)):
-                df_n = moments.iloc[i]
+            # This involves the change-of-variables (Jacobian) handled by dsolar_ghi
+            for i in range(len(m)):
+                row = m.iloc[i]
                 
-                if df_n['weights'] == 0 and df_n['isTrain']:
-                    moments.loc[i, 'loglik'] = 0.0
+                # Skip zero-weighted training points (R logic: moments$loglik[i] <- 0)
+                if row['isTrain'] and row['weights'] == 0:
                     continue
-                
+                    
                 if quasi:
-                    # Normal density
-                    def pdf_quasi(x):
-                        return dnorm(x, df_n['e_Yt'], df_n['sd_Yt'])
-                    
-                    # Quasi log-likelihood
-                    moments.loc[i, 'loglik'] = np.log(
-                        dsolarGHI(
-                            df_n['GHI'], df_n['Ct'],
-                            df_n['alpha'], df_n['beta'],
-                            pdf_quasi, link=link
-                        )
-                    )
+                    # Normal density function for the quasi-likelihood
+                    pdf_func = lambda x: norm.pdf(x, row['e_Yt'], row['sd_Yt'])
                 else:
-                    # True mixture density
-                    def pdf_Yt(x):
-                        return dmixnorm(
-                            x,
-                            mean=[df_n['M_Y1'], df_n['M_Y0']],
-                            sd=[df_n['S_Y1'], df_n['S_Y0']],
-                            alpha=[df_n['p1'], 1 - df_n['p1']]
-                        )
-                    
-                    # True log-likelihood
-                    moments.loc[i, 'loglik'] = np.log(
-                        dsolarGHI(
-                            df_n['GHI'], df_n['Ct'],
-                            df_n['alpha'], df_n['beta'],
-                            pdf_Yt, link=link
-                        )
-                    )
-        else:  # target == "Yt"
+                    # Mixture density function: p1*N(mu1, sd1) + (1-p1)*N(mu0, sd0)
+                    pdf_func = lambda x: (norm.pdf(x, row['M_Y1'], row['S_Y1']) * row['p1'] + 
+                                        norm.pdf(x, row['M_Y0'], row['S_Y0']) * (1 - row['p1']))
+                
+                # dsolarGHI handles the transformation and Jacobian adjustment
+                val = dsolarGHI(
+                    row['GHI'], 
+                    row['Ct'], 
+                    row['alpha'], 
+                    row['beta'], 
+                    pdf_func, 
+                    link=self.spec.transform['link']
+                )
+                loglik[i] = np.log(val)
+                
+        # 4. Density calculation in standardized space (Yt)
+        else:
             if quasi:
-                # Standardize the time series
-                moments['z'] = (moments['Yt'] - moments['e_Yt']) / moments['sd_Yt']
-                
-                # Pseudo log-likelihood
-                moments['loglik'] = np.log(
-                    dnorm(moments['z']) / moments['sd_Yt']
-                )
+                # Standardize and compute log-pdf: log(phi(z) / sigma)
+                z = (m[target] - m['e_Yt']) / m['sd_Yt']
+                loglik = norm.logpdf(z) - np.log(m['sd_Yt'])
             else:
-                # Standardize into components
-                moments['z1'] = (moments['Yt'] - moments['M_Y1']) / moments['S_Y1']
-                moments['z0'] = (moments['Yt'] - moments['M_Y0']) / moments['S_Y0']
+                # Mixture log-likelihood in Yt space
+                z1 = (m[target] - m['M_Y1']) / m['S_Y1']
+                z0 = (m[target] - m['M_Y0']) / m['S_Y0']
                 
-                # True mixture log-likelihood
-                moments['loglik'] = np.log(
-                    dnorm(moments['z1']) / moments['S_Y1'] * moments['p1'] +
-                    dnorm(moments['z0']) / moments['S_Y0'] * (1 - moments['p1'])
-                )
-        
-        return moments['loglik'].values
-    
-    def __repr__(self):
+                # Density = (p1 * phi(z1)/s1) + ((1-p1) * phi(z0)/s0)
+                density = (norm.pdf(z1) / m['S_Y1'] * m['p1'] + 
+                        norm.pdf(z0) / m['S_Y0'] * (1 - m['p1']))
+                loglik = np.log(density)
+                
+        return pd.Series(loglik, index=m['date'])
+
+    def __str__(self):
         """String representation of the SolarModel."""
         # Get specifications
         data = self._spec.dates['data']
@@ -987,179 +729,164 @@ class SolarModel:
         ]
         
         return "\n".join(lines)
-    
-    # ==================== Properties ====================
-    
+
+    def __repr__(self):
+        return self.__str__()
+
+    # =================================================================
+    # Active Properties (Getters)
+    # =================================================================
+
     @property
     def place(self):
-        """Location name."""
+        """Character, optional name of the location considered."""
         return self._spec.place
-    
+
     @property
     def model_name(self):
-        """Model name string."""
-        return (f"{self._spec.transform['link']}-"
-                f"ARMA({self._ARMA.order[0]}, {self._ARMA.order[1]})"
-                f"GARCH({self._GARCH.order[0]}, {self._GARCH.order[1]})")
-    
-    @property
-    def data(self):
-        """Get complete data with seasonal and monthly parameters."""
-        seasonal_data = self._seasonal_data.drop('n', axis=1, errors='ignore')
-        result = self._data.merge(seasonal_data, on=['Month', 'Day'], how='left')
-        return result
-    
-    @property
-    def seasonal_data(self):
-        """Get seasonal data."""
-        return self._seasonal_data.merge(self.monthly_data, on='Month', how='left')
-    
+        """Character, model's name combining link function and model orders."""
+        link = self._spec.transform['link']
+        ar, ma = self._arma.order
+        arch, garch = self._garch.order
+        return f"{link}-ARMA({ar}, {ma})GARCH({arch}, {garch})"
+
     @property
     def monthly_data(self):
-        """Get monthly data with mixture parameters."""
-        if self._NM_model is not None:
-            return self._monthly_data.merge(
-                self._NM_model.coefficients,
-                on='Month',
-                how='left'
-            )
+        """A data frame that contains monthly parameters, including GMM coefficients."""
+        if self._nm_model is not None and not self._nm_model.is_empty:
+            return pd.merge(self._monthly_data, self._nm_model.coefficients, on='Month', how='left')
         return self._monthly_data
-    
+
+    @property
+    def seasonal_data(self):
+        """A data frame containing seasonal and monthly parameters."""
+        return pd.merge(self._seasonal_data, self.monthly_data, on='Month', how='left')
+
+    @property
+    def data(self):
+        """The full fitted data frame joined with seasonal and monthly parameters."""
+        # Equivalent to dplyr::select(self$seasonal_data, -n)
+        seasonal = self.seasonal_data.drop(columns=['n'])
+        # Equivalent to dplyr::left_join(private$..data, seasonal_data, by = c("Month", "Day"))
+        return pd.merge(self._data, seasonal, on=['Month', 'Day'], how='left')
+
     @property
     def loglik(self):
-        """Get log-likelihood."""
+        """The log-likelihood computed on train data."""
         return self._loglik
-    
+
     @property
     def spec(self):
-        """Get model specification."""
+        """The specification object governing the model."""
         return self._spec
-    
+
     @property
     def location(self):
-        """Get location information."""
-        return pd.DataFrame({
+        """A data frame with coordinates and location metadata."""
+        loc_dict = {
             'place': [self.place],
-            'target': [self._spec.target],
-            **self._spec.coords
-        })
-    
+            'target': [self._spec.target]
+        }
+        # Merge the coordinates dictionary (lat, lon, alt)
+        loc_dict.update({k: [v] for k, v in self._spec.coords.items()})
+        return pd.DataFrame(loc_dict)
+
     @property
-    def transform(self):
-        """Get solar transform object."""
-        return self._transform
-    
+    def transform(self): return self._transform
+
     @property
-    def seasonal_model_Ct(self):
-        """Get seasonal clear sky model."""
-        return self._seasonal_model_Ct
-    
+    def seasonal_model_Ct(self): return self._seasonal_model_ct
+
     @property
-    def seasonal_model_Yt(self):
-        """Get seasonal mean model."""
-        return self._seasonal_model_Yt
-    
+    def seasonal_model_Yt(self): return self._seasonal_model_yt
+
     @property
-    def ARMA(self):
-        """Get ARMA model."""
-        return self._ARMA
-    
+    def ARMA(self): return self._arma
+
     @property
-    def seasonal_variance(self):
-        """Get seasonal variance model."""
-        return self._seasonal_variance
-    
+    def seasonal_variance(self): return self._seasonal_variance
+
     @property
-    def GARCH(self):
-        """Get GARCH model."""
-        return self._GARCH
-    
+    def GARCH(self): return self._garch
+
     @property
-    def NM_model(self):
-        """Get Gaussian mixture model."""
-        return self._NM_model
-    
+    def NM_model(self): return self._nm_model
+
     @property
     def moments(self):
-        """Get conditional and unconditional moments."""
-        moments = self._moments.copy()
+        """Returns conditional and unconditional moments with extra metadata columns."""
+        moments_dict = self._moments.copy()
         
-        # Extra data to add
-        data_extra = self.data[['date', 'GHI_bar', 'Ct', 'p1']].copy()
+        # Metadata to add to moments for downstream forecasting/plotting
+        target_bar_col = f"{self._spec.target}_bar"
+        extra_cols = ['date', target_bar_col, 'Ct', 'p1']
+        
+        # Extract from self.data (which handles the seasonal joins)
+        data_extra = self.data[extra_cols].copy()
         data_extra['alpha'] = self._transform.alpha
         data_extra['beta'] = self._transform.beta
         
-        # Conditional moments
-        if moments['conditional'] is not None:
-            moments['conditional'] = moments['conditional'].merge(
-                data_extra, on='date', how='left'
+        # Merge metadata into both moment types if they are populated
+        if moments_dict['conditional'] is not None:
+            moments_dict['conditional'] = pd.merge(
+                moments_dict['conditional'], data_extra, on='date', how='left'
             )
-        
-        # Unconditional moments
-        if moments['unconditional'] is not None:
-            moments['unconditional'] = moments['unconditional'].merge(
-                data_extra, on='date', how='left'
+            
+        if moments_dict['unconditional'] is not None:
+            moments_dict['unconditional'] = pd.merge(
+                moments_dict['unconditional'], data_extra, on='date', how='left'
             )
-        
-        return moments
-    
+            
+        return moments_dict
+
     @property
     def coefficients(self):
-        """Get model parameters as a dictionary."""
-        # Extract coefficients from all models
-        coefs = {
-            'location': self.location,
-            'params': pd.DataFrame({
-                'alpha': [self._transform.alpha],
-                'beta': [self._transform.beta]
-            }),
-            'seasonal_model_Ct': pd.DataFrame(
-                self._seasonal_model_Ct.coefficients
-            ),
-            'seasonal_model_Yt': pd.DataFrame(
-                self._seasonal_model_Yt.coefficients
-            ),
-            'ARMA': pd.DataFrame(self._ARMA.coefficients),
-            'seasonal_variance': pd.DataFrame(
-                self._seasonal_variance.coefficients
-            ),
-            'GARCH': pd.DataFrame(self._GARCH.coefficients),
+        """Aggregates all sub-model parameters into a structured nested dictionary."""
+        
+        # Gaussian Mixture Model (NM) parameter formatting (12 months)
+        nm_coefs = self._nm_model.coefficients
+        
+        def format_nm(values, prefix):
+            # Creates a single-row DataFrame with columns like mu_up_1, mu_up_2...
+            cols = [f"{prefix}_{i}" for i in range(1, 13)]
+            return pd.DataFrame([values.values], columns=cols)
+
+        params = {
+            "location": self.location,
+            "params": pd.DataFrame({'alpha': [self._transform.alpha], 'beta': [self._transform.beta]}),
+            "seasonal_model_Ct": pd.DataFrame([self._seasonal_model_ct.coefficients]),
+            "seasonal_model_Yt": pd.DataFrame([self._seasonal_model_yt.coefficients]),
+            "ARMA": pd.DataFrame([self._arma.coefficients]),
+            "seasonal_variance": pd.DataFrame([self._seasonal_variance.coefficients]),
+            "GARCH": pd.DataFrame([self._garch.coefficients]),
+            "NM_mu_up": format_nm(nm_coefs['mu1'], "mu_up"),
+            "NM_mu_dw": format_nm(nm_coefs['mu2'], "mu_dw"),
+            "NM_sd_up": format_nm(nm_coefs['sd1'], "sd_up"),
+            "NM_sd_dw": format_nm(nm_coefs['sd2'], "sd_dw"),
+            "NM_p_up": format_nm(nm_coefs['p1'], "p")
         }
-        
-        # Add mixture model parameters
-        nm_coefs = self._NM_model.coefficients
-        coefs['NM_mu_up'] = pd.DataFrame({
-            f'mu_up_{i+1}': [nm_coefs.loc[i, 'mu1']]
-            for i in range(12)
-        })
-        coefs['NM_mu_dw'] = pd.DataFrame({
-            f'mu_dw_{i+1}': [nm_coefs.loc[i, 'mu2']]
-            for i in range(12)
-        })
-        coefs['NM_sd_up'] = pd.DataFrame({
-            f'sd_up_{i+1}': [nm_coefs.loc[i, 'sd1']]
-            for i in range(12)
-        })
-        coefs['NM_sd_dw'] = pd.DataFrame({
-            f'sd_dw_{i+1}': [nm_coefs.loc[i, 'sd2']]
-            for i in range(12)
-        })
-        coefs['NM_p_up'] = pd.DataFrame({
-            f'p_{i+1}': [nm_coefs.loc[i, 'p1']]
-            for i in range(12)
-        })
-        
-        return coefs
-    
+
+        # Add stochastic clearsky correlations if they exist
+        if hasattr(self._nm_model, 'rho_up') and self._nm_model.rho_up is not None:
+            params['rho_up'] = format_nm(nm_coefs['rho_up'], "rho_up")
+            
+        if hasattr(self._nm_model, 'rho_dw') and self._nm_model.rho_dw is not None:
+            params['rho_dw'] = format_nm(nm_coefs['rho_dw'], "rho_dw")
+
+        return params
+
     @property
     def var_theta(self):
-        """Variance-covariance matrix with robust standard errors."""
+        """
+        Computes the Variance-Covariance matrix using the Sandwich Estimator.
+        H^-1 * (J' * J) * H^-1
+        """
         H = self._hessian
         J = self._jacobian
-        return np.linalg.inv(H) @ J.T @ J @ np.linalg.inv(H)
-
-
-# Note: This translation assumes the existence of helper classes:
-# - SolarTransform, SeasonalClearsky, SeasonalModel, ARMAModel, 
-# - sGARCH, SolarMixture, and various helper functions
-# These would need to be translated separately
+        
+        # solve(H) in R is equivalent to np.linalg.inv(H)
+        # crossprod(J, J) is J.T @ J
+        H_inv = np.linalg.inv(H)
+        sandwich = H_inv @ (J.T @ J) @ H_inv
+        
+        return sandwich
