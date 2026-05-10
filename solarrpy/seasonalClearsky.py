@@ -7,10 +7,20 @@ from .seasonalModel import SeasonalModel
 from .seasonalSolarFunctions import SeasonalSolarFunctions
 from .zzz import number_of_day
 
-def control_seasonalClearsky(orders=[1], order_H0=1, periods=[365], include_intercept=True, 
-                             include_trend=False, delta0=1.4, lower=0, upper=3, 
+def control_seasonalClearsky(orders=1, order_H0=1, periods=365, include_intercept=True,
+                             include_trend=False, delta0=1.4, lower=0, upper=3,
                              by=0.001, ntol=0, quiet=False):
-    """Control parameters for a `seasonalClearsky` object."""
+    """Control parameters for a ``SeasonalClearsky`` object.
+
+    Parameters
+    ----------
+    orders : int or list of int, default 1
+        Fourier expansion order(s). Scalar matches the R API; a list enables
+        multi-period extensions and is accepted transparently downstream
+        (``SeasonalModel`` wraps non-list arguments to lists internally).
+    periods : int or list of int, default 365
+        Seasonal period(s) in days. Same scalar/list contract as ``orders``.
+    """
 
     return {
         "orders": orders,
