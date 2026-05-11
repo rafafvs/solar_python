@@ -112,6 +112,50 @@ def _soradidx_year(
 # Train-test loop over all evaluation years
 # ---------------------------------------------------------------------------
 
+def daily_vt_records(
+    eval_year: int,
+    cal,
+    df_full: pd.DataFrame,
+    date_col: str = 'date',
+    ghi_col: str = 'GHI',
+) -> pd.DataFrame:
+    """Return a per-day DataFrame of dynamic Vt prices and payoffs for eval_year.
+
+    Columns: date, day_of_year (1-based), K_n, Vt_n, payoff_n, R_n,
+             cum_PL, cum_return_pct  (normalized by Vt_total).
+
+    Used to construct Figure 5 left panel (cumulative net return for seller).
+    """
+    df_year = df_full[df_full[date_col].dt.year == eval_year].sort_values(date_col).reset_index(drop=True)
+
+    rows = []
+    for i, (_, row) in enumerate(df_year.iterrows()):
+        t_hor  = row[date_col]
+        t_prev = t_hor - pd.Timedelta(days=1)
+        prev   = df_full[df_full[date_col] == t_prev]
+        if len(prev) == 0:
+            prev_fallback = df_full[df_full[date_col] < t_hor].sort_values(date_col).iloc[-1:]
+            R_prev = float(prev_fallback[ghi_col].iloc[0])
+            t_prev_use = prev_fallback[date_col].iloc[0]
+        else:
+            R_prev = float(prev[ghi_col].iloc[0])
+            t_prev_use = prev[date_col].iloc[0]
+
+        K_n    = daily_strike(t_hor, cal)
+        Vt_n   = sorad_price(K_n, R_prev, str(t_prev_use.date()), str(t_hor.date()), cal)
+        pay_n  = max(K_n - float(row[ghi_col]), 0.0)
+
+        rows.append({'date': t_hor, 'day': i + 1, 'K_n': K_n,
+                     'Vt_n': Vt_n, 'payoff_n': pay_n, 'R_n': float(row[ghi_col])})
+
+    df = pd.DataFrame(rows)
+    Vt_total = df['Vt_n'].sum()
+    df['cum_PL']         = (df['Vt_n'] - df['payoff_n']).cumsum()
+    df['cum_return_pct'] = df['cum_PL'] / Vt_total * 100.0
+    df['Vt_total']       = Vt_total
+    return df
+
+
 def compute_soradidx_table(
     df_full: pd.DataFrame,
     eval_years: Sequence[int] = (2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023),
