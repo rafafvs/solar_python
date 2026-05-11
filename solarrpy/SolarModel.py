@@ -3,16 +3,79 @@ import numpy as np
 from scipy.stats import norm
 import copy
 
-from .solarTransform import solarTransform
-from .seasonalClearsky import seasonalClearsky, clearsky_outliers
-from .seasonalModel import seasonalModel
-from .ARMA_model import armaModel
-from .sGARCH import sGARCH
-from .solarMixture import solarMixture
+# --- Imports from existing solarrpy modules (Phase 0 stabilization) ---
+# Class names corrected to PascalCase to match the actual definitions in
+# solarrpy. The lowercase R-style aliases were never defined.
+from .solarTransform import SolarTransform
+from .seasonalClearsky import SeasonalClearsky, clearsky_outliers
+from .seasonalModel import SeasonalModel
+from .ARMA_model import ARMAModel
 from .zzz import number_of_day
-from .dsolarGHI import dsolarGHI
 from .solarModel_internals import solarModel_match_params
-from .solarMoments_internals import solarMoments_conditional, solarMoments_unconditional, solarMoments
+
+# --- Phase 1 calibration (paper Appendix A.1) — re-export the module-level
+# entrypoint here so callers can use ``from solarrpy.SolarModel import
+# calibrate_window`` per the SoRad reproduction roadmap.  The actual
+# implementation lives in :mod:`solarrpy.calibration`.
+from .calibration import (  # noqa: E402,F401
+    calibrate_window,
+    calibrate_all_windows,
+    CalibrationWindowResult,
+    CalibrationAllWindowsResult,
+)
+
+# --- Phase-0 stubs for modules that have not been ported yet ---
+# Each name below is referenced inside SolarModel methods. Phase 0 keeps the
+# file importable by replacing the missing imports with placeholders that
+# raise NotImplementedError if/when the relevant code path runs. Phase 2-5
+# will provide real implementations and remove these stubs.
+_PHASE_NOT_DONE = (
+    "{name} is not implemented in this Phase 0 stabilization snapshot. "
+    "It will land in Phase {phase} of the SoRad reproduction roadmap; "
+    "see .cursor/plans/sorad_r-to-python_roadmap_*.plan.md."
+)
+
+
+def sGARCH(*args, **kwargs):  # noqa: N802 (preserve R name)
+    raise NotImplementedError(
+        _PHASE_NOT_DONE.format(name="sGARCH", phase="3 (deferred)")
+    )
+
+
+def solarMixture(*args, **kwargs):  # noqa: N802
+    raise NotImplementedError(
+        _PHASE_NOT_DONE.format(name="solarMixture", phase="1 (Step 6 EM)")
+    )
+
+
+def solarMoments(*args, **kwargs):  # noqa: N802
+    raise NotImplementedError(
+        _PHASE_NOT_DONE.format(name="solarMoments", phase="2 (conditional moments)")
+    )
+
+
+def solarMoments_conditional(*args, **kwargs):  # noqa: N802
+    raise NotImplementedError(
+        _PHASE_NOT_DONE.format(name="solarMoments_conditional", phase="2")
+    )
+
+
+def solarMoments_unconditional(*args, **kwargs):  # noqa: N802
+    raise NotImplementedError(
+        _PHASE_NOT_DONE.format(name="solarMoments_unconditional", phase="2")
+    )
+
+
+def dsolarGHI(*args, **kwargs):  # noqa: N802
+    raise NotImplementedError(
+        _PHASE_NOT_DONE.format(name="dsolarGHI", phase="2 (forecast density)")
+    )
+
+
+def qsolar_ghi(*args, **kwargs):
+    raise NotImplementedError(
+        _PHASE_NOT_DONE.format(name="qsolar_ghi", phase="2 (forecast density)")
+    )
 
 """
 SolarModel Class
@@ -105,7 +168,7 @@ class SolarModel:
         
         # 3. Component placeholders
         # These would be instances of the classes we translated previously
-        self._transform = solarTransform(alpha=0, beta=1, link=self._spec.transform['link'])
+        self._transform = SolarTransform(alpha=0, beta=1, link=self._spec.transform['link'])
         self._seasonal_model_ct = None
         self._seasonal_model_yt = None
         self._arma = None
@@ -147,13 +210,13 @@ class SolarModel:
         train_data = self._data[train_mask]
         
         # Initialize and fit
-        sm_ct = seasonalClearsky(control=control)
+        sm_ct = SeasonalClearsky(control=control)
         sm_ct.fit(
             x=train_data[self._spec.target],
             date=train_data['date'],
             lat=self._spec.coords['lat'],
             clearsky=train_data['clearsky'],
-            method="constrained",
+            optimiser="constrained",
         )
         
         # Predict for whole dataset
@@ -183,8 +246,13 @@ class SolarModel:
         control = self._spec.transform
         train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
         
-        # Fit parameters
-        params = self._transform.fit(train_data['Xt'], control['threshold'], control['min_pos'], control['max_pos'])
+        # Fit parameters. BoundTransform.fit only consumes ``Xt`` and an
+        # ``epsilon`` scaling factor — the legacy ``min_pos`` / ``max_pos``
+        # controls have no consumer in the current Python translation. The
+        # paper's prescription (App. A.1.2) is implemented inside
+        # BoundTransform.fit itself; ``threshold`` here maps to its epsilon.
+        epsilon = control.get('threshold', 1e-3)
+        params = self._transform.fit(train_data['Xt'], epsilon=epsilon)
         self._transform.update(params['alpha'], params['beta'])
         
         # Post-process Xt to avoid boundary issues in ARMA-GARCH
@@ -200,8 +268,11 @@ class SolarModel:
         target = self._spec.target
         train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
         
-        sm_yt = seasonalModel(orders=control['order'], periods=control['period'])
-        sm_yt.fit(train_data, target_col='Yt', time_col='n', include_intercept=control['include_intercept'], include_trend=control['include_trend'])
+        sm_yt = SeasonalModel(orders=control['order'], periods=control['period'])
+        # Note: SeasonalModel.fit signature is fit(data, target_col, time_col,
+        # external_regressors, include_intercept). It does not accept
+        # include_trend; that flag is handled at the seasonalClearsky layer.
+        sm_yt.fit(train_data, target_col='Yt', time_col='n', include_intercept=control['include_intercept'])
         
         self._data['Yt_bar'] = sm_yt.predict(self._data)
         self._data['Yt_tilde'] = self._data['Yt'] - self._data['Yt_bar']
@@ -229,7 +300,11 @@ class SolarModel:
         control = self._spec.mean_model
         train_data = self._data[self._data['isTrain']]
         
-        arma = armaModel(ar=control['arOrder'], ma=control['maOrder'], intercept=control['include_intercept'])
+        arma = ARMAModel(
+            ar_order=control['arOrder'],
+            ma_order=control['maOrder'],
+            include_intercept=control['include_intercept'],
+        )
         arma.fit(train_data['Yt_tilde'])
         
         self._data['Yt_tilde_hat'] = arma.filter(self._data['Yt_tilde'])
@@ -242,8 +317,9 @@ class SolarModel:
         train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)].copy()
         train_data['eps2'] = train_data['eps']**2
         
-        sv = seasonalModel(orders=control['order'], periods=control['period'])
-        sv.fit(train_data, target_col='eps2', time_col='n', include_intercept=True, include_trend=control['include_trend'])
+        sv = SeasonalModel(orders=control['order'], periods=control['period'])
+        # See note in fit_seasonal_model_yt about include_trend.
+        sv.fit(train_data, target_col='eps2', time_col='n', include_intercept=True)
         
         self._data['sigma_bar'] = np.sqrt(sv.predict(self._data))
         # Compute standardized residuals
@@ -283,20 +359,32 @@ class SolarModel:
             self._data['eps_tilde'] = self._data['eps'] / (self._data['sigma_bar'] * self._data['sigma_uncond'])
 
     def fit_garch(self):
-        """Fit GARCH model to standardize residuals further."""
+        """Fit GARCH model to standardize residuals further.
+
+        Phase 0 note
+        ------------
+        The SoRad scope of the reproduction roadmap explicitly excludes
+        sGARCH (see plan section "Scope exclusions"), so the only supported
+        path here is ``garch_variance == False``: ``sigma`` is left at 1.0
+        and ``u_tilde`` is the seasonal-variance-standardized ``eps_tilde``.
+        Activating ``garch_variance`` would require Phase 3 of the prior
+        plan (sGARCH translation), which has been deferred.
+        """
         control = self._spec
-        train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
-        
-        garch = sGARCH(arch_order=control.variance_model['archOrder'], garch_order=control.variance_model['garchOrder'])
         if control.garch_variance:
+            # Building the sGARCH stub raises NotImplementedError; only do
+            # so if the user actually opted into GARCH.
+            train_data = self._data[self._data['isTrain'] & (self._data['weights'] != 0)]
+            garch = sGARCH(arch_order=control.variance_model['archOrder'],
+                           garch_order=control.variance_model['garchOrder'])
             garch.fit(train_data['eps_tilde'], weights=train_data['weights'])
             self._data['sigma'] = np.sqrt(garch.filter(self._data['eps_tilde']))
             self._data['u_tilde'] = self._data['eps_tilde'] / self._data['sigma']
+            self._garch = garch
         else:
             self._data['sigma'] = 1.0
             self._data['u_tilde'] = self._data['eps_tilde']
-            
-        self._garch = garch
+            self._garch = None
 
     def fit_nm_model(self):
         """Fit Gaussian Mixture Model to standardized residuals."""
@@ -344,45 +432,45 @@ class SolarModel:
         
         self._nm_model = nm
 
-def update(self, params=None):
-    """
-    Update the parameters of all sub-models within the SolarModel.
-    
-    Args:
-        params (dict): A nested dictionary containing parameter updates. 
-                       Should follow the structure of self.coefficients.
-    """
-    if params is None:
-        print("`params` is missing, nothing to update!")
-        return
+    def update(self, params=None):
+        """
+        Update the parameters of all sub-models within the SolarModel.
 
-    if not isinstance(params, dict):
-        params = solarModel_match_params(params, self.coefficients)
+        Args:
+            params (dict): A nested dictionary containing parameter updates.
+                           Should follow the structure of self.coefficients.
+        """
+        if params is None:
+            print("`params` is missing, nothing to update!")
+            return
 
-    if 'params' in params:
-        self._transform.update(params['alpha'], params['beta'])
+        if not isinstance(params, dict):
+            params = solarModel_match_params(params, self.coefficients)
 
-    # Update clear sky model
-    self._seasonal_model_ct.update(params['seasonal_model_ct'])
-    # Update seasonal mean model
-    self._seasonal_model_yt.update(params['seasonal_model_yt'])
-    # Update ARMA model
-    self._arma.update(params['ARMA'])
-    # Update GARCH model
-    self._garch.update(params['GARCH'])
-    # Update seasonal variance model
-    self._seasonal_variance.update(params['seasonal_variance'])
+        if 'params' in params:
+            self._transform.update(params['alpha'], params['beta'])
 
-    # Update Gaussian Mixture Model (NM_model)
-    means = np.column_stack((params['NM_mu_up'], params['NM_mu_dw']))
-    sds = np.column_stack((params['NM_sd_up'], params['NM_sd_dw']))
-    probs = np.column_stack((params['NM_p_up'], 1 - params['NM_p_up']))
+        # Update clear sky model
+        self._seasonal_model_ct.update(params['seasonal_model_ct'])
+        # Update seasonal mean model
+        self._seasonal_model_yt.update(params['seasonal_model_yt'])
+        # Update ARMA model
+        self._arma.update(params['ARMA'])
+        # Update GARCH model
+        self._garch.update(params['GARCH'])
+        # Update seasonal variance model
+        self._seasonal_variance.update(params['seasonal_variance'])
 
-    # Update the NM sub-model
-    self._nm_model.update(means=means, sd=sds, p=probs)
+        # Update Gaussian Mixture Model (NM_model)
+        means = np.column_stack((params['NM_mu_up'], params['NM_mu_dw']))
+        sds = np.column_stack((params['NM_sd_up'], params['NM_sd_dw']))
+        probs = np.column_stack((params['NM_p_up'], 1 - params['NM_p_up']))
 
-    # Invalidate the stored total log-likelihood
-    self._loglik = None
+        # Update the NM sub-model
+        self._nm_model.update(means=means, sd=sds, p=probs)
+
+        # Invalidate the stored total log-likelihood
+        self._loglik = None
 
     def update_moments(self):
         """
@@ -539,16 +627,20 @@ def update(self, params=None):
         # 7. Final Standardized Residuals
         data['u_tilde'] = data['eps_tilde'] / data['sigma']
 
-    def moments(self, t_now, t_hor, theta=0, quiet=False):
+    def compute_moments(self, t_now, t_hor, theta=0, quiet=False):
         """
         Compute conditional moments for a sequence of future dates.
-        
+
+        Renamed from ``moments`` in Phase 0 to resolve a method/property name
+        collision: ``moments`` is also a ``@property`` returning the cached
+        ``{'conditional': ..., 'unconditional': ...}`` dict.
+
         Args:
             t_now (str/datetime): Reference date for the forecast.
             t_hor (list/pd.DatetimeIndex): Sequence of future dates to forecast.
             theta (float): Shift parameter for the mixture model.
             quiet (bool): If True, suppresses diagnostic messages.
-            
+
         Returns:
             pd.DataFrame: A combined DataFrame of moments for each date in t_hor.
         """
@@ -579,8 +671,8 @@ def update(self, params=None):
             start_date = pd.to_datetime(t_now) + pd.Timedelta(days=1)
             t_seq = pd.date_range(start=start_date, end=t_hor, freq='D')
             
-            # Call the internal moments method (translated previously)
-            moments = self.moments(t_now, t_seq, theta=theta, quiet=False)
+            # Call the internal moments method (renamed in Phase 0).
+            moments = self.compute_moments(t_now, t_seq, theta=theta, quiet=False)
 
         # 2. Add realized GHI from internal data
         # self.data is the property that joins seasonal features

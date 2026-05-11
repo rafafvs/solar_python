@@ -3,7 +3,7 @@ import numpy as np
 from datetime import datetime
 from typing import Optional, Dict, Any, Union
 
-from .seasonalClearsky import clearsky_outliers
+from .seasonalClearsky import clearsky_outliers, control_seasonalClearsky
 
 # Assuming clearsky_outliers and control_seasonal_clearsky are defined in 
 # your other modules (as per previous files)
@@ -42,14 +42,15 @@ class SolarModelSpec:
         self.set_variance_model()
         self.set_mixture_model()
 
-    def specification(self, 
-                      place: str, 
+    def specification(self,
+                      place: str,
                       data: pd.DataFrame,
-                      target: str = "GHI", 
-                      min_date: Optional[str] = None, 
-                      max_date: Optional[str] = None, 
-                      from_date: Optional[str] = None, 
-                      to_date: Optional[str] = None):
+                      target: str = "GHI",
+                      min_date: Optional[str] = None,
+                      max_date: Optional[str] = None,
+                      from_date: Optional[str] = None,
+                      to_date: Optional[str] = None,
+                      coords: Optional[Dict[str, float]] = None):
         """
         Main entry point for configuring the data and modeling window.
         """
@@ -97,8 +98,18 @@ class SolarModelSpec:
 
         # Store results (Mimicking R attributes)
         self._place = place
-        # In Python, we extract coords from dataframe attributes if they exist
-        self._coords = getattr(df, "coords", {"lat": "NA", "lon": "NA", "alt": "NA"})
+        # Coords resolution order: explicit kwarg > df.attrs['coords'] >
+        # legacy ad-hoc attribute > unknown sentinel. Storing "NA" strings
+        # broke downstream float() conversions; use NaN floats instead so
+        # callers can detect missing values in a uniform way.
+        if coords is not None:
+            self._coords = dict(coords)
+        elif "coords" in getattr(df, "attrs", {}):
+            self._coords = dict(df.attrs["coords"])
+        elif hasattr(df, "coords"):
+            self._coords = dict(getattr(df, "coords"))
+        else:
+            self._coords = {"lat": float("nan"), "lon": float("nan"), "alt": float("nan")}
         self._data = df
         self._target = target
 
@@ -120,9 +131,22 @@ class SolarModelSpec:
             "threshold": threshold, "link": link
         }
 
-    def set_clearsky(self, control=None):
-        # In Python, we'd typically pass a dict or a specific config object
-        self._clearsky = control if control else {"order": 1, "period": 365}
+    def set_clearsky(self, control=None, **kwargs):
+        """Configure the clear-sky control dict.
+
+        Parameters
+        ----------
+        control : dict or None
+            Pre-built control dict (typically the return value of
+            ``control_seasonalClearsky``). If None, a default is built using
+            ``control_seasonalClearsky()`` with any keyword overrides.
+        **kwargs : optional
+            Forwarded to ``control_seasonalClearsky`` when ``control`` is None.
+        """
+        if control is None:
+            self._clearsky = control_seasonalClearsky(**kwargs)
+        else:
+            self._clearsky = control
 
     def set_seasonal_mean(self, order=1, period=365, include_trend=False, include_intercept=True, monthly_mean=False):
         self._seasonal_mean = {
@@ -173,6 +197,9 @@ class SolarModelSpec:
 
     @property
     def transform(self): return self._transform
+
+    @property
+    def clearsky(self): return self._clearsky
 
     @property
     def seasonal_mean(self): return self._seasonal_mean

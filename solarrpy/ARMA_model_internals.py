@@ -126,13 +126,14 @@ def arma_companion_matrix(phi=None, theta=None):
 
     # Combine all blocks
     A = np.vstack(blocks)
-    
-    # Store orders as metadata (Pythonic approach: use an object or dictionary)
-    # For a direct translation, we attach it to the array object
-    A.flags.writeable = True # Ensure we can add attributes
-    A.ar_order = p
-    A.ma_order = q
-    
+
+    # Note (Phase 0): the original translation tried to attach `ar_order` and
+    # `ma_order` as attributes on the returned ndarray. ``numpy.ndarray`` does
+    # not support arbitrary attribute assignment, so the lines crashed at
+    # runtime. They are removed here because no consumer reads these
+    # attributes (verified via grep across solarrpy). Callers that need the
+    # orders should pass them in alongside ``A`` or read them off the source
+    # ARMA spec object.
     return A
 
 # ---------------------------------------------------------------------------
