@@ -259,7 +259,17 @@ class SeasonalClearsky(SeasonalModel):
             external_regressors = ext_regressors,
             include_intercept   = include_intercept
         )
-    
+
+        # Snapshot the unconstrained OLS coefficients and standard errors
+        # *before* any optimiser branch mutates them. The constrained
+        # optimiser ultimately invalidates ``_model.bse`` (every call to
+        # ``SeasonalModel.update`` writes NaN into the cached bse), so this
+        # snapshot is the only way callers can recover the OLS SEs after
+        # ``optimiser='constrained'``. The ``delta_optimiser`` path also
+        # rescales these in place — keep an unscaled reference here.
+        self._ols_params = self._model.params.copy()
+        self._ols_bse    = self._model.bse.copy()
+
         data["Ct_hat"] = self.predict(newdata=data)
     
         # ------------------------------------------------------------------ #

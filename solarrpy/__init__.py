@@ -62,6 +62,44 @@ from .radiationModel_internals import (
 from .solarModel_spec import SolarModelSpec
 from .SolarModel import SolarModel
 
+# --- Phase 1 calibration (Tables A1, A2, A3)
+from .calibration import (
+    OMEGA,
+    DEFAULT_TRAIN_END_YEARS,
+    CalibrationWindowResult,
+    CalibrationAllWindowsResult,
+    calibrate_window,
+    calibrate_all_windows,
+)
+
+# --- Phase 2: conditional moments, forecast density, simulation
+from .forecastDensity import (
+    clearsky_at,
+    clearsky_array,
+    seasonal_mean_Y_at,
+    R_to_Y,
+    Y_to_R,
+    conditional_moments_Y,
+    mixture_pdf_R,
+    mixture_cdf_R,
+    mixture_quantile_R,
+    mixture_expected_R,
+)
+from .simulator import simulate_ou_mixture
+
+# --- Phase 3: SoRad pricing engine
+from .sorad import (
+    strike_to_Y,
+    daily_strike,
+    G_integral,
+    sorad_price,
+)
+
+# --- Phase 4: SoRadIDX
+from .soradidx import (
+    compute_soradidx_table,
+)
+
 __all__ = [
     # Helpers
     "number_of_day",
@@ -87,4 +125,17 @@ __all__ = [
     "reparam_seasonal_function", "integral_sigma_numeric", "integral_sigma2_formula",
     # SolarModel
     "SolarModelSpec", "SolarModel",
+    # Phase 1 calibration
+    "OMEGA", "DEFAULT_TRAIN_END_YEARS",
+    "CalibrationWindowResult", "CalibrationAllWindowsResult",
+    "calibrate_window", "calibrate_all_windows",
+    # Phase 2: forecast density + simulation
+    "clearsky_at", "clearsky_array", "seasonal_mean_Y_at", "R_to_Y", "Y_to_R",
+    "conditional_moments_Y",
+    "mixture_pdf_R", "mixture_cdf_R", "mixture_quantile_R", "mixture_expected_R",
+    "simulate_ou_mixture",
+    # Phase 3: SoRad pricing
+    "strike_to_Y", "daily_strike", "G_integral", "sorad_price",
+    # Phase 4: SoRadIDX
+    "compute_soradidx_table",
 ]

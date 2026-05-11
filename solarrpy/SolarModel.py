@@ -13,6 +13,17 @@ from .ARMA_model import ARMAModel
 from .zzz import number_of_day
 from .solarModel_internals import solarModel_match_params
 
+# --- Phase 1 calibration (paper Appendix A.1) — re-export the module-level
+# entrypoint here so callers can use ``from solarrpy.SolarModel import
+# calibrate_window`` per the SoRad reproduction roadmap.  The actual
+# implementation lives in :mod:`solarrpy.calibration`.
+from .calibration import (  # noqa: E402,F401
+    calibrate_window,
+    calibrate_all_windows,
+    CalibrationWindowResult,
+    CalibrationAllWindowsResult,
+)
+
 # --- Phase-0 stubs for modules that have not been ported yet ---
 # Each name below is referenced inside SolarModel methods. Phase 0 keeps the
 # file importable by replacing the missing imports with placeholders that
