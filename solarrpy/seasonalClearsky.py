@@ -183,6 +183,7 @@ class SeasonalClearsky(SeasonalModel):
         super().__init__(orders=control['orders'], periods=control['periods'])
         
         self.lat = None
+        self.alt = None
 
         self.version = "1.0.1"
         self.coefficients_orig = None
@@ -221,6 +222,7 @@ class SeasonalClearsky(SeasonalModel):
     
         self._ssf = SeasonalSolarFunctions(method='spencer')
         self.lat  = float(np.atleast_1d(lat)[0])
+        self.alt  = float(np.atleast_1d(alt)[0]) if alt is not None else None
     
         # ------------------------------------------------------------------ #
         # Build dataset
@@ -236,7 +238,7 @@ class SeasonalClearsky(SeasonalModel):
         data['GHI']   = np.asarray(x)   # alias used by clearsky_optimizer
     
         if H0 is None:
-            data["H0"] = self._ssf.Hon(data["n"].values, self.lat)
+            data["H0"] = self._ssf.Hon(data["n"].values, self.lat, self.alt)
         else:
             data["H0"] = H0
     

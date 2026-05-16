@@ -25,7 +25,6 @@ class GaussianMixtureModel:
         
         # State placeholders (Mapped from R6 private list)
         self._x = None
-        self._w = None
         self._loglik = np.nan
         self._fitted = None
         
@@ -114,7 +113,7 @@ class GaussianMixtureModel:
             )
             
         # 5. Output formatting
-        cols = [f"B{k+1}" for k in range(self.components)]
+        cols = [f"B{k}" for k in range(self.components)]
         return pd.DataFrame(responsibilities, columns=cols)
 
     def classify(self, x: np.ndarray = None) -> pd.DataFrame:
@@ -136,7 +135,7 @@ class GaussianMixtureModel:
         # np.argmax returns 0-based indices. 
         # We add 1 to match R's 1-based indexing for class labels (1, 2, ..., K).
         class_idx = np.argmax(resp, axis=1)
-        classification = class_idx + 1
+        classification = class_idx
         
         # 2. Vectorized Uncertainty
         uncertainty = 1.0 - np.max(resp, axis=1)
@@ -158,42 +157,29 @@ class GaussianMixtureModel:
         out_dict = {'classification': classification}
         
         for k in range(self.components):
-            out_dict[f'B{k+1}'] = B_hat[:, k]
+            out_dict[f'B{k}'] = B_hat[:, k]
             
         for k in range(self.components):
-            out_dict[f'x{k+1}'] = x_hat[:, k]
+            out_dict[f'x{k}'] = x_hat[:, k]
             
         for k in range(self.components):
-            out_dict[f'z{k+1}'] = z_hat[:, k]
+            out_dict[f'z{k}'] = z_hat[:, k]
             
         out_dict['uncertainty'] = uncertainty
         
         return pd.DataFrame(out_dict)
 
-    def fit(self, x: np.ndarray, weights: np.ndarray = None, mu_target: float = None, var_target: float = None) -> None:
+    def fit(self, x: np.ndarray, mu_target: float = None, var_target: float = None) -> None:
         """
         Fit the mixture parameters using EM, optionally matching target moments.
         """
         x = np.asarray(x, dtype=float)
         n = len(x)
         
-        # 1. Weights Processing (Binary Masking)
-        if weights is None:
-            w = np.ones(n, dtype=float)
-        else:
-            weights = np.asarray(weights, dtype=float)
-            w = np.where(weights == 0, 0.0, 1.0)
-            
-        # Exclude NaN values from the fit
-        w[np.isnan(x)] = 0.0
-        
         # Store full series in state
         self._x = x
-        self._w = w
-        
-        # Filter array for fitting
-        x_fit = x[w != 0]
-        
+        x_fit = x[~np.isnan(x)]
+
         if len(x_fit) < self.components:
             raise ValueError("Not enough valid observations to fit the requested number of components.")
             
@@ -262,20 +248,14 @@ class GaussianMixtureModel:
         Update the log-likelihood with the current parameters.
         """
         # Failsafe: Cannot compute likelihood if data hasn't been ingested
-        if self._x is None or self._w is None:
+        if self._x is None:
             self._loglik = np.nan
             return
             
         x = self._x
-        
-        # Copy the weights array to prevent accidental state mutation.
-        w = self._w.copy()
-        
-        # Set NA weights equal to zero
-        w[np.isnan(x)] = 0.0
-        
+    
         # Update log-likelihood slot
-        self._loglik = self.logLik(x[w != 0.0])
+        self._loglik = self.logLik(x[~np.isnan(x)])
 
     def update_empiric_parameters(self) -> None:
         """
@@ -348,7 +328,7 @@ class GaussianMixtureModel:
         using numerical differentiation.
         """
         # Ensure we have data to evaluate
-        if self._x is None or self._w is None:
+        if self._x is None:
             return
 
         params = self.coefficients
@@ -377,7 +357,7 @@ class GaussianMixtureModel:
             par_dict = {'means': m_tmp, 'sd': s_tmp, 'p': p_tmp}
             
             # Filter data and compute log-likelihood
-            x_filtered = self._x[self._w != 0.0]
+            x_filtered = self._x[~np.isnan(self._x)]
             return self.logLik(x_filtered, params=par_dict, per_obs=per_obs)
             
         # 1. Numerical Differentiation
@@ -415,9 +395,17 @@ class GaussianMixtureModel:
         # 4. Full Covariance Matrix
         self._vcov = Jac @ Cv @ Jac.T
         
-        # 5. Extract Standard Errors
-        # np.abs() protects against numerical instability yielding negative diagonals
-        std_errors = np.sqrt(np.abs(np.diag(self._vcov)))
+        # 5. Safely Extract Standard Errors
+        try:
+            std_errors = np.sqrt(np.diag(self._vcov))
+        except np.linalg.LinAlgError:
+            warnings.warn(
+                f"Variance-covariance matrix has negative diagonal elements."
+                "This may indicate the model did not converge to a proper local maximum, "
+                "near-degenerate components, or a constrained optimum.",
+                RuntimeWarning
+            )
+            std_errors = np.sqrt(np.abs(np.diag(self._vcov)))
         
         self._std_means = std_errors[0:K]
         self._std_sd = std_errors[K:2*K]
