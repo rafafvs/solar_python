@@ -21,7 +21,7 @@ Pipeline (one window):
     6. J(t-1, t, t) and I(t-1, t, t) from Propositions A.1 / Eq. B.5.
        Standardise ε̃_t = ε_t / √J.  Per-calendar-month two-component EM
        mixture (sklearn) sorted by ascending mean (cloudy=lower, sunny=
-       higher).  Correction factor √(I/J) applied to the means before the
+       higher).  Correction factor √J/I applied to the means before the
        analytic mixture moments are evaluated for Table A3.
 
 The pipeline does **not** call ``SolarModel.fit()`` because that
@@ -39,9 +39,7 @@ Notes on convergence and fidelity to the paper
   this matches the existing reference notebook and the plan's accepted
   R-vs-Python tolerance for Table A1.
 * The mean-correction factor in Step 6 follows the plan literally:
-  ``mu_continuous = mu_discrete * sqrt(I/J)`` (the alternative ``I/√J``
-  used in the legacy notebook is preserved in the result diagnostics for
-  inspection but is not what is reported in Table A3).
+  ``mu_continuous = mu_discrete * sqrt(J)/I``
 """
 
 from __future__ import annotations
@@ -127,6 +125,9 @@ class CalibrationWindowResult:
     # --- diagnostics: full enriched training frame
     df_train: pd.DataFrame = field(repr=False)
 
+    # tick: monetary conversion factor (€ per kWh/m²). 1.0 = leave prices in raw GHI units.
+    tick: float = 1.0
+
 
 @dataclass
 class CalibrationAllWindowsResult:
@@ -150,7 +151,7 @@ def _step1_clear_sky(
     clearsky_col: str,
     date_col: str,
     lat: float,
-    altitude: Optional[float],
+    alt: Optional[float],
     optimiser: str,
 ) -> tuple[SeasonalClearsky, np.ndarray, np.ndarray]:
     """Constrained OLS clear-sky fit.  Returns (model, delta, delta_se).
@@ -213,12 +214,12 @@ def _step1_clear_sky(
         date=df_train[date_col],
         lat=lat,
         clearsky=df_train[clearsky_col],
-        alt=altitude,
+        alt=alt,
         optimiser=underlying,
     )
 
-    delta_ols = np.asarray(model._ols_params.values[:4], dtype=float)
-    delta_se = np.asarray(model._ols_bse.values[:4], dtype=float)
+    delta_ols = np.asarray(model._ols_params.values[:4], dtype=float) # not used with optimiser='delta_optimiser'
+    delta_se_ols = np.asarray(model._ols_bse.values[:4], dtype=float) # not used with optimiser='delta_optimiser'
 
     if optimiser == "slsqp":
         # Reconstruct the design matrix used by ``predict``: it pulls H0
@@ -227,8 +228,8 @@ def _step1_clear_sky(
             H0 = np.asarray(df_train["H0"].values, dtype=float)
         else:
             from .seasonalSolarFunctions import SeasonalSolarFunctions as _SSF
-            ssf = _SSF()
-            H0 = np.asarray(ssf.Hon(df_train["n"].values.astype(float), lat), dtype=float)
+            ssf = _SSF(method="spencer")
+            H0 = np.asarray(ssf.Hon(df_train["n"].values.astype(float), lat, alt), dtype=float)
         n = df_train["n"].values.astype(float)
         X = np.column_stack([
             np.ones(len(df_train)),
@@ -276,6 +277,7 @@ def _step1_clear_sky(
         delta = delta_final
     else:
         delta = np.asarray(model._model.params.values[:4], dtype=float)
+        delta_se = np.asarray(model._model.bse.values[:4], dtype=float)
 
     return model, delta, delta_se
 
@@ -342,7 +344,7 @@ def _step3_seasonal_mean(
 
 
 def _step4_theta(
-    Yt: np.ndarray, Yt_bar: np.ndarray
+    Yt: np.ndarray, Yt_bar: np.ndarray, n: np.ndarray
 ) -> tuple[float, np.ndarray, np.ndarray, SeasonalModel]:
     """Two-stage θ recovery.
 
@@ -356,9 +358,10 @@ def _step4_theta(
     n = len(Yt)
 
     # Stage 4a — explicit (ΔY)^2 OLS so we can return (b*, se_b*).
-    dYt2 = np.full(n, np.nan)
-    dYt2[2:] = (Yt[1:-1] - Yt[:-2]) ** 2
+    dYt2 = np.full(len(Yt), np.nan)
+    dYt2[1:] = (Yt[1:] - Yt[:-1]) ** 2
     fit_df = pd.DataFrame({"dYt2": dYt2, "n": np.arange(1, n + 1)}).dropna()
+    #fit_df = pd.DataFrame({"dYt2": dYt2, "n": n}).dropna()
     sm_b_star = SeasonalModel(orders=[1], periods=[365])
     sm_b_star.fit(data=fit_df, target_col="dYt2", time_col="n", include_intercept=True)
     b_star = np.asarray(sm_b_star._model.params.values[:3], dtype=float)
@@ -408,12 +411,12 @@ def _step6_monthly_mixture(
     reparam: dict,
     *,
     em_max_iter: int = 5000,
-    em_max_restarts: int = 50,
+    em_max_restarts: int = 500,
 ) -> pd.DataFrame:
-    """Per-calendar-month EM with √(I/J) mean correction.
+    """Per-calendar-month EM with √J/I mean correction.
 
-    Adds ``J``, ``I``, ``eps_tilde``, ``corr_paper`` (= √(I/J)), and
-    ``corr_legacy`` (= I/√J) columns to ``df_train`` *in place* so the
+    Adds ``J``, ``I``, ``eps_tilde``, and ``corr_`` (= √J/I),
+    columns to ``df_train`` *in place* so the
     caller can inspect the day-level diagnostics.
     """
 
@@ -432,13 +435,11 @@ def _step6_monthly_mixture(
 
     # Standardise ε.  J should be > 0 by construction; clamp to defend
     # against unlikely numerical underflow at the seasonal trough.
-    safe_J = np.maximum(J_vals, 1e-12)
-    df_train["eps_tilde"] = df_train["eps"] / np.sqrt(safe_J)
+    #safe_J = np.maximum(J_vals, 1e-12)
+    df_train["eps_tilde"] = df_train["eps"] / np.sqrt(J_vals)
 
-    # Two correction factors retained for diagnostics; the published Table
-    # A3 uses corr_paper per the user's "literal interpretation" choice.
-    df_train["corr_paper"] = np.sqrt(I_vals / safe_J)
-    df_train["corr_legacy"] = I_vals / np.sqrt(safe_J)
+    # Correction factor to the mean.
+    df_train["corr_"] = np.sqrt(J_vals) / I_vals
 
     rows: list[dict] = []
     for month in range(1, 13):
@@ -450,8 +451,7 @@ def _step6_monthly_mixture(
         x = sub["eps_tilde"].values
         I_avg = float(sub["I"].mean())
         J_avg = float(sub["J"].mean())
-        corr_paper = float(np.sqrt(I_avg / max(J_avg, 1e-12)))
-        corr_legacy = float(I_avg / np.sqrt(max(J_avg, 1e-12)))
+        corr_ = float(np.sqrt(J_avg) / I_avg)
 
         gmm = GaussianMixtureModel(
             components=2, maxit=em_max_iter, maxrestarts=em_max_restarts
@@ -466,10 +466,10 @@ def _step6_monthly_mixture(
         # (Phase-0 confirmed).  cloudy = state 1 = index 0; sunny =
         # state 0 = index 1.
         classifications = gmm.fitted["classification"].values
-        N1_cloudy = int((classifications == 1).sum())
-        N0_sunny = int((classifications == 2).sum())
+        N1_cloudy = int((classifications == 0).sum())
+        N0_sunny = int((classifications == 1).sum())
 
-        mu_corrected = mu_raw * corr_paper
+        mu_corrected = mu_raw * corr_
         moms = gm_moments(mu_corrected, sd, p).iloc[0]
 
         rows.append({
@@ -489,8 +489,7 @@ def _step6_monthly_mixture(
             "kurtosis": float(moms["kurtosis"]),
             "I_avg": I_avg,
             "J_avg": J_avg,
-            "mean_corr_paper": corr_paper,
-            "mean_corr_legacy": corr_legacy,
+            "mean_corr": corr_,
         })
 
     return pd.DataFrame(rows)
@@ -505,6 +504,7 @@ def calibrate_window(
     clearsky_col: str = "clearsky",
     date_col: str = "date",
     optimiser: str = "delta_optimiser",
+    tick: float = 1.0,
 ) -> CalibrationWindowResult:
     """Run the six-step Appendix A.1 pipeline on training data ≤ ``train_end_year``.
 
@@ -552,11 +552,13 @@ def calibrate_window(
         clearsky_col=clearsky_col,
         date_col=date_col,
         lat=float(coords["lat"]),
-        altitude=None,
+        alt=float(coords["alt"]) if "alt" in coords else None,
         optimiser=optimiser,
     )
-    columns_to_drop = [col for col in df_train.columns if 'H0' in col]
-    df_train["Ct"] = cs_model.predict(newdata=df_train.drop(columns=columns_to_drop))
+    df_train["Ct"] = cs_model.predict(
+        newdata=df_train, 
+        alt=float(coords["alt"]) if "alt" in coords else None
+    )
 
     # Mandatory scrubbing of any residual outliers (CAMS occasionally
     # records GHI marginally above the constrained envelope; impute them).
@@ -578,7 +580,18 @@ def calibrate_window(
     alpha = float(bounds["alpha"])
     beta = float(bounds["beta"])
     epsilon = float(bounds["epsilon"])
-    df_train["Yt"] = transform.RY(df_train["GHI_clean"], df_train["Ct"])
+
+    # Clip Xt at (alpha + eps, alpha + beta - eps) before Y to keep Yt away
+    # from ±inf at the bounds (mirrors the R (1±delta) clamp in
+    # solarModel-R6.R:181-190).  Yt-blow-ups at the bounds otherwise propagate
+    # into eps_t and contaminate the monthly EM mixture (Feb skew/kurt).
+    Xt_raw = np.asarray(transform.X(df_train["GHI_clean"], df_train["Ct"]), dtype=float)
+    lo = alpha + epsilon
+    hi = alpha + beta - epsilon
+    Xt_clipped = np.clip(Xt_raw, lo, hi)
+    df_train["Xt"] = Xt_clipped
+    df_train["Xt_clipped_flag"] = (Xt_raw < lo) | (Xt_raw > hi)
+    df_train["Yt"] = transform.Y(transform.X_prime(Xt_clipped))
 
     # --- 3. Seasonal mean of Y
     sm_yt, a, a_se = _step3_seasonal_mean(df_train)
@@ -586,7 +599,7 @@ def calibrate_window(
 
     # --- 4. θ via martingale
     theta, b_star, b_star_se, sm_b_star = _step4_theta(
-        df_train["Yt"].values, df_train["Yt_bar"].values
+        df_train["Yt"].values, df_train["Yt_bar"].values, df_train["n"].values
     )
 
     # --- 5. variance OLS + reparam
@@ -619,6 +632,7 @@ def calibrate_window(
         seasonal_var_model=sm_var,
         monthly_mixture=monthly_mixture,
         df_train=df_train,
+        tick=float(tick),
     )
 
 

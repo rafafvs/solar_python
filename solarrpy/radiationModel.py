@@ -10,7 +10,7 @@ from scipy.integrate import quad
 
 
 from .zzz import number_of_day
-from .radiationModel_internals import shift, create_monthly_sequence, martingale_method_seasonal, reparam_seasonal_function, integral_sigma_numeric, integral_sigma2_formula 
+from .radiationModel_internals import create_monthly_sequence, martingale_method_seasonal, reparam_seasonal_function, integral_sigma_numeric, integral_sigma2_formula 
 
 # ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
@@ -349,8 +349,8 @@ class RadiationModel:
         data = self._model.data.copy()
         data["K_Y"]      = self._model.R_to_Y(data["GHI_bar"], data["date"])
         data["payoff"]   = (data["GHI_bar"] - data["GHI"]) * ((data["GHI_bar"] > data["GHI"]).astype(float))
-        data["L1_Yt_bar"] = shift(data["Yt_bar"], tau)
-        data["L1_Yt"]    = shift(data["Yt"], tau)
+        data["L1_Yt_bar"] = pd.Series(data["Yt_bar"]).shift(tau).values
+        data["L1_Yt"]    = pd.Series(data["Yt"]).shift(tau).values
         data = data[(data["date"] >= t_hor.min()) & (data["date"] <= t_hor.max())]
 
         # 1) Y forecast
