@@ -19,18 +19,6 @@ Functions:
 Version: 1.0.0
 """
 
-def shift(arr, n):
-    arr_shifted = np.empty_like(arr, dtype=float)
-    if n == 0:
-        arr_shifted[:] = arr
-    if n > 0:
-        arr_shifted[:n] = np.nan
-        arr_shifted[n:] = arr[:-n]
-    else:
-        arr_shifted[n:] = np.nan
-        arr_shifted[:n] = arr[-n:]
-    return arr_shifted
-
 def create_monthly_sequence(t_now, t_hor, last_day=False):
     t_now = pd.Timestamp(t_now)
     t_hor = pd.Timestamp(t_hor)
@@ -58,7 +46,12 @@ def create_monthly_sequence(t_now, t_hor, last_day=False):
         "n":     n_of_day,
     })
     
-    df["N"] = df["n"] + number_of_day(t_now) + np.concatenate([[0], np.cumsum(n_of_day[1:])])
+    # Mirror R's c(0, cumsum(lag(df_dates$n, 1)[-1])): cumulative end-of-sub-interval
+    # offsets computed from the LAGGED lengths (previous values), not the leading slice.
+    # The original n_of_day[1:] form was off-by-one and pushed sub-interval endpoints
+    # beyond tau, causing exp(-2θ(T−s)) in integral_sigma2_formula to blow up for
+    # any horizon > 1 day. See R radiationModel-internals.R:30.
+    df["N"] = df["n"] + number_of_day(t_now) + np.concatenate([[0], np.cumsum(n_of_day[:-1])])
 
     # n = N - n  (start index of each sub-interval)
     df["n"] = df["N"] - df["n"]
@@ -79,61 +72,53 @@ def create_monthly_sequence(t_now, t_hor, last_day=False):
 # ---------------------------------------------------------------------------
 # martingale_method_seasonal
 # ---------------------------------------------------------------------------
-def martingale_method_seasonal(Yt, Yt_bar, e_mu = 0):
-    """
-    Martingale estimation for mean-reversion parameter theta.
-    Uses SeasonalModel to fit a time-varying variance to the squared differences.
-    """
+def martingale_method_seasonal(Yt, Yt_bar, e_mu=0):
     Yt = np.asarray(Yt)
     Yt_bar = np.asarray(Yt_bar)
-    
+
     if np.isscalar(e_mu):
         e_mu = np.full_like(Yt, e_mu)
     else:
         e_mu = np.asarray(e_mu)
-        
-    n = len(Yt)
-    
-    # Quadratic variation (dYt2)
-    # Equivalent to (lag(Yt, 1) - lag(Yt, 2))^2
-    dYt2 = (shift(Yt, 1) - shift(Yt, 2)) ** 2
-    
-    # Construct a DataFrame to feed into SeasonalModel
-    data_df = pd.DataFrame({
-        'dYt2': dYt2,
-        'n': np.arange(1, n + 1)
-    })
-    
-    # Drop NaNs for the fit
+
+    # ── CHANGED: use global sequential counter 1..N, matching R's
+    #    data$n <- 1:nrow(data)
+    #    The Fourier OLS for sigma2_bar must see n growing monotonically
+    #    across the full training window, not resetting each January.
+    n_global = np.arange(1, len(Yt) + 1, dtype=float)
+
+    # Quadratic variation
+    dYt2 = (Yt - pd.Series(Yt).shift(1).values) ** 2
+
+    data_df = pd.DataFrame({'dYt2': dYt2, 'n': n_global})
     fit_df = data_df.dropna(subset=['dYt2']).copy()
-    
-    # Initialize and fit the seasonal variance model
+
     seasonal_variance = SeasonalModel()
     seasonal_variance.fit(
-        data=fit_df, 
-        target_col='dYt2', 
-        time_col='n', 
+        data=fit_df,
+        target_col='dYt2',
+        time_col='n',
         include_intercept=True
     )
-    
-    pred_df = pd.DataFrame({'n': np.arange(n)})
+
+    # Predict sigma2_bar at global n − 1 to match R's predict(1:nrow(data) - 1)
+    pred_df = pd.DataFrame({'n': n_global - 1})
     sigma2_bar = seasonal_variance.predict(data=pred_df, time_col='n')
-    
-    # Martingale estimation components
-    # lag(Yt_bar, 1) - lag(Yt, 1)
-    Y_est_L1 = (shift(Yt_bar, 1) - shift(Yt, 1)) / sigma2_bar.values
+
+    # Martingale components — unchanged
+    Y_est_L1 = (pd.Series(Yt_bar).shift(1).values - pd.Series(Yt).shift(1).values) / sigma2_bar.values
     dYt = Yt - Yt_bar
-    dYt_L1 = shift(Yt, 1) - shift(Yt_bar, 1) - shift(e_mu, 1)
-    
+    dYt_L1 = (pd.Series(Yt).shift(1).values
+               - pd.Series(Yt_bar).shift(1).values
+               - pd.Series(e_mu).shift(1).values)
+
     df = pd.DataFrame({
         "Y_est_L1": Y_est_L1,
         "dYt":      dYt,
         "dYt_L1":   dYt_L1,
     }).dropna()
-    
-    # Create mask to drop NaNs
+
     a_n = np.sum(df["Y_est_L1"] * df["dYt"]) / np.sum(df["Y_est_L1"] * df["dYt_L1"])
-    
     return -np.log(a_n)
 
 # ---------------------------------------------------------------------------
@@ -143,35 +128,35 @@ def reparam_seasonal_function(par, theta, omega=2 * np.pi / 365):
     """
     Reparametrization for seasonal variance. Maps OLS parameters to continuous-time parameters.
     """
-    a0, a1, a2 = par[0], par[1], par[2]
+    b0, b1, b2 = par[0], par[1], par[2]
     
     # Correction for long term variance
-    c0_long = a0 * 2 * theta
-    c1_long = a1 * 2 * theta - omega * a2
-    c2_long = a2 * 2 * theta + omega * a1
+    c0_long = b0 * 2 * theta
+    c1_long = b1 * 2 * theta - omega * b2
+    c2_long = b2 * 2 * theta + omega * b1
     
     gamma0_long = c0_long / (2 * theta)
     gamma1_long = (c1_long * 2 * theta + c2_long * omega) / (4 * theta**2 + omega**2)
     gamma2_long = (c2_long * 2 * theta - c1_long * omega) / (4 * theta**2 + omega**2)
 
     # Correction for short term variance
-    alpha = 1 - np.exp(-2 * theta) * np.cos(omega)
-    beta = np.exp(-2 * theta) * np.sin(omega)
-    detM = alpha**2 + beta**2
+    phi1 = 1 - np.exp(-2 * theta) * np.cos(omega)
+    phi2 = np.exp(-2 * theta) * np.sin(omega)
+    detM = phi1**2 + phi2**2
     
-    c0 = (2 * theta * a0) / (1 - np.exp(-2 * theta))
-    c1 = ((2 * theta * alpha + omega * beta) * a1 + (2 * theta * beta - omega * alpha) * a2) / detM
-    c2 = ((omega * alpha - 2 * theta * beta) * a1 + (omega * beta + 2 * theta * alpha) * a2) / detM
+    c0 = (2 * theta * b0) / (1 - np.exp(-2 * theta))
+    c1 = ((2 * theta * phi1 + omega * phi2) * b1 + (2 * theta * phi2 - omega * phi1) * b2) / detM
+    c2 = ((omega * phi1 - 2 * theta * phi2) * b1 + (omega * phi2 + 2 * theta * phi1) * b2) / detM
     
     gamma0 = c0 / (2 * theta)
     gamma1 = (c1 * 2 * theta + c2 * omega) / (4 * theta**2 + omega**2)
     gamma2 = (c2 * 2 * theta - c1 * omega) / (4 * theta**2 + omega**2)
     
     return {
-        "alpha": alpha,
-        "beta": beta,
+        "phi1": phi1,
+        "phi2": phi2,
         "detM": detM,
-        "a_": np.array([a0, a1, a2]),
+        "b_": np.array([b0, b1, b2]),
         "c_": np.array([c0, c1, c2]),
         "c_long": np.array([c0_long, c1_long, c2_long]),
         "gamma": np.array([gamma0, gamma1, gamma2]),
@@ -191,7 +176,7 @@ def integral_sigma_numeric(theta, par, omega=2 * np.pi / 365):
         return c0 + c1 * np.sin(omega * tau) + c2 * np.cos(omega * tau)
         
     def integrand(tau, T_val):
-        val = seasonal_function(tau) * np.exp(-2 * theta * (T_val - tau))
+        val = seasonal_function(tau) * np.exp(- 2 * theta * (T_val - tau))
         # Protect against negative values inside the sqrt due to numerical drift
         return np.sqrt(np.maximum(val, 0))
         

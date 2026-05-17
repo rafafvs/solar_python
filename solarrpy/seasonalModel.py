@@ -223,7 +223,7 @@ class SeasonalModel:
                 self._model.params[name] = value
                 self._std_errors[name] = np.nan
 
-        self._model._cache['bse'] = self._std_errors.values.copy()
+        self._model._cache['bse'] = self._std_errors.copy()
 
         # 3. Recompute derivative coefficients from updated params
         self.dcoefs = self._model.params.copy()
@@ -249,7 +249,7 @@ class SeasonalModel:
             if name in self._std_errors.index:
                 self._std_errors[name] = value
 
-        self._model._cache['bse'] = self._std_errors.values.copy()
+        self._model._cache['bse'] = self._std_errors.copy()
 
         return self
 

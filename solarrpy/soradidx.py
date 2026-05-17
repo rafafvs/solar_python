@@ -47,13 +47,14 @@ def _soradidx_year(
     eval_year : int  — year whose daily contracts are being priced
     cal       : CalibrationWindowResult  — trained on data up to eval_year - 1
     df_full   : pd.DataFrame  — full dataset (needs prior-year end + eval-year rows)
-    mode      : 'V0', 'Vt', or 'both'
+    mode      : 'V0', 'Vt', 'both', or 'gamma' (realised payoff only — skips pricing)
     date_col  : column name for dates
     ghi_col   : column name for observed GHI
 
     Returns
     -------
-    dict with keys: eval_year, V0, Vt, V_hist, n_days
+    dict with keys: eval_year, V0, Vt, Gamma, n_days
+        Gamma = sum_n tick · max(K_n − R_n, 0) — single-year realised payoff.
     """
     df_year = df_full[df_full[date_col].dt.year == eval_year].copy()
     df_year = df_year.sort_values(date_col).reset_index(drop=True)
@@ -74,15 +75,15 @@ def _soradidx_year(
 
     V0    = 0.0
     Vt    = 0.0
-    V_hist = 0.0
+    Gamma = 0.0
+    tick  = float(getattr(cal, 'tick', 1.0))
 
     for _, row in df_year.iterrows():
         t_hor  = row[date_col]
         R_real = float(row[ghi_col])
 
         K_n    = daily_strike(t_hor, cal)
-        payoff = max(K_n - R_real, 0.0)
-        V_hist += payoff
+        Gamma += max(K_n - R_real, 0.0)
 
         if mode in ('V0', 'both'):
             V0 += sorad_price(K_n, R_t0, str(t0.date()), str(t_hor.date()), cal)
@@ -101,9 +102,9 @@ def _soradidx_year(
 
     return {
         'eval_year': eval_year,
-        'V0':        V0,
-        'Vt':        Vt,
-        'V_hist':    V_hist,
+        'V0':        tick * V0,
+        'Vt':        tick * Vt,
+        'Gamma':     tick * Gamma,
         'n_days':    len(df_year),
     }
 
@@ -142,8 +143,9 @@ def daily_vt_records(
             t_prev_use = prev[date_col].iloc[0]
 
         K_n    = daily_strike(t_hor, cal)
-        Vt_n   = sorad_price(K_n, R_prev, str(t_prev_use.date()), str(t_hor.date()), cal)
-        pay_n  = max(K_n - float(row[ghi_col]), 0.0)
+        tick   = float(getattr(cal, 'tick', 1.0))
+        Vt_n   = tick * sorad_price(K_n, R_prev, str(t_prev_use.date()), str(t_hor.date()), cal)
+        pay_n  = tick * max(K_n - float(row[ghi_col]), 0.0)
 
         rows.append({'date': t_hor, 'day': i + 1, 'K_n': K_n,
                      'Vt_n': Vt_n, 'payoff_n': pay_n, 'R_n': float(row[ghi_col])})
@@ -163,35 +165,43 @@ def compute_soradidx_table(
     target_col: str = 'GHI',
     clearsky_col: str = 'clearsky',
     date_col: str = 'date',
+    tick: float = 0.10,
+    hist_start_year: int = 2006,
     progress: bool = True,
 ) -> pd.DataFrame:
     """Run the train-test loop producing Table 1 of the paper.
 
-    For each eval_year Y:
-      - train on 2005..(Y-1)
-      - compute V0, Vt, V_hist for year Y
+    For each year h in [hist_start_year, max(eval_years)]:
+      - train on 2005..(h-1)
+      - compute Gamma_h (single-year realised payoff) using the contemporaneous model
+      - if h in eval_years: additionally compute V0, Vt
+    Then V_hist[Y] = mean(Gamma_h for h in hist_start_year..Y).
 
-    Parameters
-    ----------
-    df_full    : full dataset (all years)
-    eval_years : evaluation years (paper: 2014–2023)
-    coords     : {'lat': ...} passed to calibrate_window
-    progress   : print progress messages
+    A final 'Average {hist_start_year}-{max(eval_years)}' row averages each column
+    over the prediction years.
 
     Returns
     -------
-    pd.DataFrame  with columns: eval_year, train_end_year, V0, Vt, V_hist, n_days
+    pd.DataFrame  with columns:
+        eval_year, train_end_year, V_hist, V0, Vt, Gamma, n_days
     """
     from .calibration import calibrate_window
 
     if coords is None:
         coords = {'lat': 44.5}
 
-    records = []
-    for eval_year in eval_years:
-        train_end = eval_year - 1
+    eval_years = list(eval_years)
+    eval_set   = set(eval_years)
+    max_eval   = max(eval_years)
+    all_years  = list(range(hist_start_year, max_eval + 1))
+
+    records: list[dict] = []
+    gamma_history: dict[int, float] = {}
+
+    for year in all_years:
+        train_end = year - 1
         if progress:
-            print(f"  [{eval_year}] Training on 2005–{train_end}...", end=' ', flush=True)
+            print(f"  [{year}] Training on 2005–{train_end}...", end=' ', flush=True)
 
         df_train = df_full[df_full[date_col].dt.year <= train_end].copy()
         cal = calibrate_window(
@@ -201,20 +211,55 @@ def compute_soradidx_table(
             date_col=date_col,
             coords=coords,
             train_end_year=train_end,
+            tick=tick,
         )
 
+        is_eval = year in eval_set
         if progress:
-            print(f"pricing {eval_year}...", end=' ', flush=True)
+            print(("pricing " if is_eval else "gamma   ") + f"{year}...", end=' ', flush=True)
 
-        result = _soradidx_year(eval_year, cal, df_full, mode='both',
-                                date_col=date_col, ghi_col=target_col)
-        result['train_end_year'] = train_end
-        records.append(result)
+        result = _soradidx_year(
+            year, cal, df_full,
+            mode='both' if is_eval else 'gamma',
+            date_col=date_col, ghi_col=target_col,
+        )
+        gamma_history[year] = result['Gamma']
+
+        if not is_eval:
+            if progress:
+                print(f"Gamma={result['Gamma']:.3f}")
+            continue
+
+        # Running V_hist: mean of Gamma_h for h in [hist_start_year, year]
+        running = [gamma_history[h] for h in range(hist_start_year, year + 1)]
+        V_hist  = float(np.mean(running))
+
+        records.append({
+            'eval_year':      year,
+            'train_end_year': train_end,
+            'V_hist':         V_hist,
+            'V0':             result['V0'],
+            'Vt':             result['Vt'],
+            'Gamma':          result['Gamma'],
+            'n_days':         result['n_days'],
+        })
 
         if progress:
-            print(f"V0={result['V0']:.3f}  Vt={result['Vt']:.3f}  V_hist={result['V_hist']:.3f}")
+            print(f"V_hist={V_hist:.3f}  V0={result['V0']:.3f}  Vt={result['Vt']:.3f}  Gamma={result['Gamma']:.3f}")
 
     df_out = pd.DataFrame(records, columns=[
-        'eval_year', 'train_end_year', 'V0', 'Vt', 'V_hist', 'n_days'
+        'eval_year', 'train_end_year', 'V_hist', 'V0', 'Vt', 'Gamma', 'n_days'
     ])
+
+    # Average row (over the prediction years)
+    avg_row = {
+        'eval_year':      f'Average {hist_start_year}-{max_eval}',
+        'train_end_year': '',
+        'V_hist':         float(df_out['V_hist'].mean()),
+        'V0':             float(df_out['V0'].mean()),
+        'Vt':             float(df_out['Vt'].mean()),
+        'Gamma':          float(df_out['Gamma'].mean()),
+        'n_days':         '',
+    }
+    df_out = pd.concat([df_out, pd.DataFrame([avg_row])], ignore_index=True)
     return df_out
