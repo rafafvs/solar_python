@@ -75,7 +75,7 @@ def G_integral(K_Y: float, mu_i: float, sd_i: float) -> float:
     def integrand(y: float) -> float:
         return np.exp(-np.exp(y)) * norm.pdf(y, mu_i, sd_i)
 
-    result, _ = quad(integrand, lo, K_Y, limit=200)
+    result, _ = quad(integrand, -np.inf, K_Y, limit=200)
     return float(result)
 
 
