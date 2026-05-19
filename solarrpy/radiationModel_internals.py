@@ -48,11 +48,8 @@ def create_monthly_sequence(t_now, t_hor, last_day=False):
     
     # Mirror R's c(0, cumsum(lag(df_dates$n, 1)[-1])): cumulative end-of-sub-interval
     # offsets computed from the LAGGED lengths (previous values), not the leading slice.
-    # The original n_of_day[1:] form was off-by-one and pushed sub-interval endpoints
-    # beyond tau, causing exp(-2θ(T−s)) in integral_sigma2_formula to blow up for
-    # any horizon > 1 day. See R radiationModel-internals.R:30.
     df["N"] = df["n"] + number_of_day(t_now) + np.concatenate([[0], np.cumsum(n_of_day[:-1])])
-
+    
     # n = N - n  (start index of each sub-interval)
     df["n"] = df["N"] - df["n"]
 
@@ -172,11 +169,11 @@ def integral_sigma_numeric(theta, par, omega=2 * np.pi / 365):
     """
     c0, c1, c2 = par[0], par[1], par[2]
     
-    def seasonal_function(tau):
-        return c0 + c1 * np.sin(omega * tau) + c2 * np.cos(omega * tau)
+    def seasonal_function(t):
+        return c0 + c1 * np.sin(omega * t) + c2 * np.cos(omega * t)
         
-    def integrand(tau, T_val):
-        val = seasonal_function(tau) * np.exp(- 2 * theta * (T_val - tau))
+    def integrand(tau, T_):
+        val = seasonal_function(tau) * np.exp(- 2 * theta * (T_ - tau))
         # Protect against negative values inside the sqrt due to numerical drift
         return np.sqrt(np.maximum(val, 0))
         
