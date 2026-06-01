@@ -122,7 +122,7 @@ def gm_fit(x: np.ndarray, components: int = 2, maxit: int = 30000, maxrestarts: 
         covariance_type='full',
         max_iter=maxit,
         n_init=maxrestarts, # Number of initializations to run
-        init_params='random' # Standard robust initialization
+        init_params='kmeans' # Standard robust initialization
     )
     
     gmm.fit(x_matrix)
