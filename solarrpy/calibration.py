@@ -343,6 +343,149 @@ def _step3_seasonal_mean(
     return model, a, a_se
 
 
+import math
+def _as_1d(a: np.ndarray, name: str) -> np.ndarray:
+    x = np.asarray(a, dtype=float).ravel()
+    if x.ndim != 1:
+        raise ValueError(f"{name} must be a 1-D array.")
+    if not np.all(np.isfinite(x)):
+        raise ValueError(f"{name} contains non-finite values.")
+    return x
+
+def _ar1_css(
+    y: np.ndarray,
+    include_intercept: bool = False,
+) -> tuple[float, float]:
+    """
+    Conditional sum-of-squares AR(1), matching ``arima(..., order=c(1,0,0),
+    include.mean=include_intercept, method='CSS')`` for the AR part.
+    """
+    x = _as_1d(y, "Y_tilde")
+    if x.size < 3:
+        raise ValueError("Need at least 3 observations for AR(1) estimation.")
+    y_obs = x[1:]
+    x_lag = x[:-1]
+    if include_intercept:
+        X = np.column_stack([np.ones_like(x_lag), x_lag])
+        coef, _, _, _ = np.linalg.lstsq(X, y_obs, rcond=None)
+        intercept, phi = float(coef[0]), float(coef[1])
+    else:
+        denom = float(np.dot(x_lag, x_lag))
+        if denom <= 0.0:
+            raise ValueError("Zero variance in lagged Y_tilde; cannot fit AR(1).")
+        phi = float(np.dot(y_obs, x_lag) / denom)
+        intercept = 0.0
+    # Stationarity clip (solarr uses tanh on unconstrained params; |phi| < 1)
+    if phi >= 1.0:
+        phi = 1.0 - 1e-12
+    elif phi <= -1.0:
+        phi = -1.0 + 1e-12
+    return phi, intercept
+
+def mean_reversion_speed(
+    Y_tilde: np.ndarray,
+    delta: float = 1.0,
+    include_intercept: bool = False,
+    ) -> float:
+    """
+    Estimate mean reversion speed from ``Y_t`` and seasonal mean ``bar{Y}_t``.
+
+    Parameters
+    ----------
+    Y_t
+        Transformed series (solarr ``Y_t`` after the link function).
+    Y_bar
+        Seasonal mean ``bar{Y}_t``. If omitted, ``day_of_year`` is required and
+        ``bar{Y}_t`` is fitted with the default Fourier seasonal model.
+    day_of_year
+        Day-of-year index ``n`` (1..365), used only when ``Y_bar`` is None.
+    delta
+        Time step between observations (1.0 = one day). Used to convert ``phi``
+        to continuous OU speed ``beta = -log(phi)/delta``.
+    period
+        Seasonal period for the internal Fourier fit (365 in solarr).
+    include_intercept
+        If True, fit AR(1) with intercept on ``Y_tilde`` (solarr
+        ``include.intercept = TRUE`` on the mean model).
+    method
+        - ``"solarr"`` / ``"bibby_sorensen"``: AR(1) then ``theta = -log(phi)/delta``.
+        - ``"kessler"``: ergodic martingale ``theta = 1/(2 mean(X^2))`` (different units).
+    return_details
+        If True, return a ``MeanReversionResult`` with ``phi`` and ``Y_tilde``.
+
+    Returns
+    -------
+    float or MeanReversionResult
+        Mean reversion speed ``theta`` (OU ``beta`` for solarr-compatible methods).
+    """
+    Y_tilde = _as_1d(Y_tilde, "Y_t")
+
+    if delta <= 0.0:
+        raise ValueError("delta must be positive.")
+
+    phi, _ = _ar1_css(Y_tilde, include_intercept=include_intercept)
+    if phi <= 0.0:
+        raise ValueError(
+            f"AR(1) persistence phi={phi:.6g} <= 0; "
+            "cannot convert to OU speed -log(phi)/delta."
+        )
+    theta = -math.log(phi) / delta
+
+    return theta
+
+def fit_monthly_mean(
+    Y_tilde: np.ndarray,
+    month: np.ndarray):
+    """
+    Replicate solarr ``solarModel$fit_monthly_mean()`` (optional monthly demean).
+
+    When ``enabled`` is True, compute the mean of ``Y_tilde`` within each calendar
+    month on the training sample, store it as ``Yt_tilde_uncond``, and subtract it
+    from ``Y_tilde`` for all dates (same month gets the same correction).
+
+    This runs after ``Y_tilde = Y_t - Y_bar`` and before the ARMA mean model.
+
+    Parameters
+    ----------
+    Y_tilde
+        Deseasonalized transformed series (``Y_t - bar{Y}_t``).
+    month
+        Calendar month per observation, integers in ``1..12`` (solarr ``Month``).
+    train_mask
+        Boolean mask for rows used to estimate monthly means. In solarr this is
+        ``isTrain & (weights != 0)``. If None, all observations are used.
+    enabled
+        If False, return ``Y_tilde`` unchanged and ``Yt_tilde_uncond`` all zeros
+        (equivalent to ``seasonal.mean$control$monthly.mean = FALSE``).
+
+    Returns
+    -------
+    MonthlyDemeanResult
+        Corrected ``Y_tilde`` and the 12 monthly correction factors.
+
+    Examples
+    --------
+    >>> Y_tilde = Y_t - Y_bar
+    >>> out = fit_monthly_mean(Y_tilde, month, train_mask=is_train & (weights > 0))
+    >>> Y_tilde_for_arma = out.Y_tilde
+    """
+
+    y = _as_1d(Y_tilde, "Y_tilde")
+    m = np.asarray(month).ravel()
+
+    month_int = m.astype(np.intp)
+
+    # Mean Y_tilde per month on training data (solarr::group_by(Month) %>% summarise)
+    Yt_tilde_uncond = np.zeros(12, dtype=float)
+    for mo in range(1, 13):
+        idx = (month_int == mo)
+        Yt_tilde_uncond[mo - 1] = float(np.mean(y[idx]))
+
+    # left_join by Month, then subtract (applies to full series)
+    y_out = y - Yt_tilde_uncond[month_int - 1]
+
+    return y_out
+
 def _step4_theta(
     Yt: np.ndarray, Yt_bar: np.ndarray, n: np.ndarray
 ) -> tuple[float, np.ndarray, np.ndarray, SeasonalModel]:
@@ -601,6 +744,12 @@ def calibrate_window(
     theta, b_star, b_star_se, sm_b_star = _step4_theta(
         df_train["Yt"].values, df_train["Yt_bar"].values, df_train["n"].values
     )
+
+    ## --- 4. θ via arma
+    #df_train["Y_tilde"] = fit_monthly_mean(df_train["Yt"] - df_train["Yt_bar"], df_train["Month"])
+    #theta = mean_reversion_speed(
+    #    df_train["Y_tilde"].values
+    #)
 
     # --- 5. variance OLS + reparam
     b, b_se, c, gamma, sm_var, reparam = _step5_variance_reparam(df_train, theta)
